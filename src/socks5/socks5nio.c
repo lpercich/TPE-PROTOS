@@ -11,6 +11,7 @@
 #include <pthread.h>
 
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include "hello.h"
 #include "request.h"
@@ -51,7 +52,9 @@ enum socks_v5state {
      */
     HELLO_WRITE,
 
-…
+    REQUEST_READ,
+    REQUEST_WRITE,
+    COPY,
 
     // estados terminales
     DONE,
@@ -68,9 +71,24 @@ struct hello_st {
     struct hello_parser   parser;
     /** el método de autenticación seleccionado */
     uint8_t               method;
-} ;
+};
 
-…
+/** Estado para manejar REQUEST del cliente */
+struct request_st {
+    buffer *rb, *wb;                // Buffers de lectura/escritura
+    struct request_parser parser;   // Parser del mensaje REQUEST
+};
+
+/** Estado para el modo COPY (túnel de datos) */
+struct copy {
+    int fd;          // File descriptor del socket (cliente u origen)
+    buffer *rb, *wb; // Buffers de lectura/escritura
+};
+
+/** Estado para la conexión asíncrona al servidor origen */
+struct connecting {
+    buffer *wb;      // Buffer de escritura para la respuesta
+};
 
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
@@ -81,7 +99,25 @@ struct hello_st {
  * liberarlo finalmente, y un pool para reusar alocaciones previas.
  */
 struct socks5 {
-…
+    /** informacion del cliente */
+    struct sockaddr_storage       client_addr;
+    socklen_t                     client_addr_len;
+    int                           client_fd;
+
+    /** informacion del origen */
+    struct sockaddr_storage       origin_addr;
+    socklen_t                     origin_addr_len;
+    int                           origin_fd;
+    int                           origin_domain;
+    struct addrinfo              *origin_resolution;
+
+    /** buffers circulares para I/O no bloqueante */
+    buffer read_buffer, write_buffer;
+
+    /** arrays subyacentes para los buffers circulares (2KB cada uno) */
+    uint8_t raw_buff_a[2048];
+    uint8_t raw_buff_b[2048];
+
     /** maquinas de estados */
     struct state_machine          stm;
 
@@ -96,9 +132,23 @@ struct socks5 {
         struct connecting         conn;
         struct copy               copy;
     } orig;
-…
+
+    /** gestión del pool de reutilización de memoria */
+    struct socks5 *next;     // Puntero al siguiente en la lista del pool
+    unsigned references;     // Contador de referencias (para liberar cuando llega a 0)
 };
 
+/** Forward declaration de la tabla de estados (definida más abajo) */
+static const struct state_definition client_statbl[];
+
+/** Variables globales para el pool de sesiones:
+ * - max_pool: máximo de sesiones a cachear (evita malloc/free excesivo)
+ * - pool_size: cantidad actual de sesiones en el pool
+ * - pool: lista enlazada de sesiones disponibles para reutilizar
+ */
+static const unsigned max_pool = 50;
+static unsigned pool_size = 0;
+static struct socks5 *pool = 0;
 
 /** realmente destruye */
 static void
@@ -158,6 +208,58 @@ static const struct fd_handler socks5_handler = {
     .handle_close  = socksv5_close,
     .handle_block  = socksv5_block,
 };
+
+/**
+ * Crea una nueva sesión SOCKS5 para un cliente.
+ * Utiliza un pool de objetos para evitar malloc/free frecuentes.
+ * 
+ * @param client_fd File descriptor del socket del cliente
+ * @return Puntero a la sesión inicializada, o NULL si falla
+ */
+static struct socks5 *
+socks5_new(const int client_fd) {
+    struct socks5 *ret;
+    
+    // Intentar reutilizar del pool primero
+    if(pool == NULL) {
+        ret = malloc(sizeof(*ret));  // Pool vacío, usar malloc
+    } else {
+        ret = pool;                  // Tomar del pool
+        pool = pool->next;           // Avanzar la lista
+        ret->next = 0;
+        pool_size--;
+    }
+    
+    if(ret == NULL) {
+        return ret;  // Fallo de alocación
+    }
+    
+    // Limpiar toda la estructura
+    memset(ret, 0x00, sizeof(*ret));
+    
+    // Inicializar file descriptors
+    ret->origin_fd = -1;              // Todavía no conectado al origen
+    ret->client_fd = client_fd;       // Socket del cliente
+    ret->client_addr_len = sizeof(ret->client_addr);
+    
+    // Configurar la máquina de estados
+    ret->stm.initial = HELLO_READ;    // Primer estado: leer HELLO
+    ret->stm.max_state = ERROR;       // Estado máximo (para validación)
+    ret->stm.states = client_statbl;  // Tabla de transiciones
+    stm_init(&ret->stm);              // Inicializar STM
+    
+    // Inicializar buffers circulares
+    buffer_init(&ret->read_buffer, N(ret->raw_buff_a), ret->raw_buff_a);
+    buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
+    
+    // Vincular buffers al estado inicial (HELLO)
+    ret->client.hello.rb = &ret->read_buffer;
+    ret->client.hello.wb = &ret->write_buffer;
+
+    // Iniciar con 1 referencia
+    ret->references = 1;
+    return ret;
+}
 
 /** Intenta aceptar la nueva conexión entrante*/
 void
@@ -270,15 +372,44 @@ hello_process(const struct hello_st* d) {
     return ret;
 }
 
-/** definición de handlers para cada estado */
+/** 
+ * Handler llamado al salir del estado HELLO_READ.
+ * Por ahora es un stub vacío (no hay cleanup necesario).
+ */
+static void hello_read_close(const unsigned state, struct selector_key *key) {
+    (void)state;  // Parámetro no usado
+    (void)key;    // Parámetro no usado
+}
+
+/**
+ * Tabla de estados de la máquina de estados.
+ * Cada entrada define los handlers para un estado específico.
+ * La máquina de estados (stm.c) usa esta tabla para saber qué hacer en cada evento.
+ */
 static const struct state_definition client_statbl[] = {
     {
         .state            = HELLO_READ,
-        .on_arrival       = hello_read_init,
-        .on_departure     = hello_read_close,
-        .on_read_ready    = hello_read,
+        .on_arrival       = hello_read_init,      // Al entrar: inicializar parser
+        .on_departure     = hello_read_close,     // Al salir: cleanup (stub por ahora)
+        .on_read_ready    = hello_read,           // Cuando hay datos: leer HELLO
     },
-…
+    {
+        .state            = HELLO_WRITE,
+        .on_arrival       = NULL,
+        .on_departure     = NULL,
+        .on_write_ready   = NULL,  // TODO Phase 1: Implementar escritura de respuesta HELLO
+    },
+    {
+        .state            = DONE,              // Estado terminal: conexión completada
+        .on_arrival       = NULL,
+        .on_departure     = NULL,
+    },
+    {
+        .state            = ERROR,             // Estado terminal: error ocurrido
+        .on_arrival       = NULL,
+        .on_departure     = NULL,
+    }
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 // Handlers top level de la conexión pasiva.
