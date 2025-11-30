@@ -19,7 +19,7 @@ SOCKS5_DIR = $(SRC_DIR)/socks5
 INCLUDES = -I$(SRC_DIR) -I$(LIB_DIR) -I$(PARSERS_DIR) -I$(SOCKS5_DIR)
 
 # Source files
-SRCS = $(SRC_DIR)/main.c \
+SRCS = $(SRC_DIR)/echoMain.c \
        $(SRC_DIR)/args.c \
        $(LIB_DIR)/buffer.c \
        $(LIB_DIR)/netutils.c \
@@ -29,7 +29,7 @@ SRCS = $(SRC_DIR)/main.c \
        $(PARSERS_DIR)/parser_utils.c \
        $(PARSERS_DIR)/hello_parser.c \
        $(PARSERS_DIR)/request_parser.c \
-       $(SOCKS5_DIR)/socks5nio.c
+       $(SRC_DIR)/server.c
 
 # Object files
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))

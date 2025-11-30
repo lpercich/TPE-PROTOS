@@ -74,7 +74,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
 {
     memset(args, 0, sizeof(*args)); // sobre todo para setear en null los punteros de users
 
-    args->socks_addr = "0.0.0.0";
+    args->socks_addr = "::"; //ANTES DECIA 0.0.0.0 PERO SOLO ACEPTABA CONECCIONES IPV4
     args->socks_port = 1080;
 
     args->mng_addr = "127.0.0.1";
