@@ -11,6 +11,7 @@
 #include "socks5/socks5nio.h"
 #include "lib/buffer.h"
 #include "lib/selector.h"
+#include "stm.h"
 
 #define BUFFER_SIZE 4096    
 

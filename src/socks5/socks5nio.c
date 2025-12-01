@@ -41,7 +41,7 @@ struct hello_st {
 /** Estado para manejar REQUEST del cliente */
 struct request_st {
     buffer *rb, *wb;                // Buffers de lectura/escritura
-    struct request_parser parser;   // Parser del mensaje REQUEST
+    request_parser parser;   // Parser del mensaje REQUEST
 };
 
 /** Estado para el modo COPY (túnel de datos) */
