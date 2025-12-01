@@ -328,7 +328,7 @@ hello_process(const struct hello_st* d) {
 
     uint8_t m = d->method;
     const uint8_t r = (m == SOCKS_HELLO_NO_ACCEPTABLE_METHODS) ? 0xFF : 0x00;
-    if (-1 == hello_marshall(d->wb, r)) {
+    if (-1 == hello_reply(d->wb, r)) {
         ret  = ERROR;
     }
     if (SOCKS_HELLO_NO_ACCEPTABLE_METHODS == m) {

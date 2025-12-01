@@ -8,12 +8,20 @@
 #include <stdint.h>
 
 #include "server.h"
-#include "socks5/socks5nio.h"
+//#include "socks5/socks5nio.h"
 #include "lib/buffer.h"
 #include "lib/selector.h"
 #include "stm.h"
+#include "parsers/hello.h"
 
 #define BUFFER_SIZE 4096    
+
+enum socks_v5state {
+    HELLO_READ,
+    HELLO_WRITE,
+    DONE,
+    ERROR,
+};
 
 typedef struct {
     enum socks_v5state state;
@@ -31,18 +39,95 @@ typedef struct {
     uint8_t write_memory[BUFFER_SIZE];
 
     //estado en el que se encuentra la lectura/parseo
-    struct state_machine *stm;
+    struct state_machine stm;
+
+    //Parsers y datos de estado
+    struct hello_parser hello_parser;
+    uint8_t chosen_method;
 } client_t;
+
+
 
 static void on_client_read(struct selector_key *key);
 static void on_client_write(struct selector_key *key);
 static void on_client_close(struct selector_key *key);
+
+static unsigned on_hello_read(struct selector_key *key);
+static unsigned on_hello_write(struct selector_key *key);
 
 static const struct fd_handler session_handlers = {
     .handle_read  = on_client_read,
     .handle_write = on_client_write,
     .handle_close = on_client_close,
 };
+
+static const struct state_definition state_definition[] = {
+    {
+        .state = HELLO_READ,
+        .on_read_ready = on_hello_read,
+    },
+    {
+        .state = HELLO_WRITE,
+        .on_write_ready = on_hello_write,
+    },
+    {
+        .state = DONE,
+        // Al llegar a DONE, podríamos cerrar la conexión por ahora
+    },
+    {
+        .state = ERROR,
+    }
+};
+
+//HELLO READ: Recibe datos del cliente y alimenta al parser
+
+static unsigned on_hello_read(struct selector_key *key) {
+    client_t *session = key->data;
+    bool errored = false;
+
+    //Leo del socket al buffer
+    size_t nbyte;
+    uint8_t *ptr = buffer_write_ptr(&session->read_buffer, &nbyte);
+    ssize_t ret = recv(key->fd, ptr, nbyte, 0);
+    
+    if(ret <= 0) return ERROR; //O hubo un error o se cerro la conexion
+    buffer_write_adv(&session->read_buffer, ret);
+    
+    //Alimento al parser
+    enum hello_state state = hello_consume(&session->read_buffer, &session->hello_parser, &errored);
+    if(hello_is_done(state, 0)) {
+        //termino el handshake
+        //Calculamos la rta (POR AHORA 0x00 PORQUE NO IMPLEMENTAMOS AUTH)
+        if(-1 == hello_reply(&session->write_buffer,0x00)) {
+            return ERROR;
+        }
+
+        //Cambi de interes a WRITE asi mando la rta
+        selector_set_interest(key->s, key->fd, OP_WRITE);
+        return HELLO_WRITE;
+    }
+    if(errored) return ERROR;
+    return HELLO_READ; //Esperamos los datos
+}
+
+//HELLO WRITE: Envio la respuesta al cliente
+static unsigned on_hello_write(struct selector_key *key) {
+    client_t *session = key->data;
+    size_t nbyte;
+    uint8_t *ptr = buffer_read_ptr(&session->write_buffer, &nbyte);
+    
+    ssize_t ret = send(key->fd, ptr, nbyte, MSG_NOSIGNAL);
+    if(ret <= 0) return ERROR; //O hubo un error o se cerro la conexion
+    
+    buffer_read_adv(&session->write_buffer, ret);
+    
+    if(buffer_can_read(&session->write_buffer)) {
+        return HELLO_WRITE; //ahora falta mandar los datos
+    }
+    //Ya mandamos todo el saludo. EN EL FUTURO ACA PASARIAMOS A REQUEST_READ
+    printf("Handshake completado para el fd %d\n", key->fd);
+    return DONE;
+}
 
 static void session_destroy(client_t *session) {
     if (session != NULL) {
@@ -70,7 +155,12 @@ static client_t *session_new(int fd) {
     
     session->stm.initial=HELLO_READ;
     session->stm.max_state=ERROR; //quiza cambiarlo para que no me entre en un loop infinito ¿?
+    session->stm.states=state_definition;
+    session->stm.current = NULL;
     stm_init(&session->stm);
+
+    hello_parser_init(&session->hello_parser);
+    session->hello_parser.data = session;
 
     return session;
 }
@@ -79,7 +169,14 @@ static client_t *session_new(int fd) {
 //Handler de LECTURA: El cliente nos mandó datos.
 static void on_client_read(struct selector_key *key) {
     client_t *session = key->data;
-    size_t wbytes;
+
+    unsigned state = stm_handler_read(&session->stm, key);
+
+    if(state == ERROR || state == DONE) {
+        on_client_close(key); //Cerrar si fallo o termino
+    }
+
+    /* size_t wbytes;
     
     // 1. Me guarda en el puntero el lugar donde puedo escribir
     uint8_t *write_ptr = buffer_write_ptr(&session->read_buffer, &wbytes);
@@ -91,8 +188,8 @@ static void on_client_read(struct selector_key *key) {
         // Si n=0 (cierre) o n<0 (error), cerramos la sesión.
         // Al desregistrar, el selector llamará automáticamente a on_client_close.
         selector_unregister_fd(key->s, key->fd);
-        return;
-    }
+        return; */
+   /*  }
     
     // 3. Confirmamos que leímos 'n' bytes (valida que se haya leido correctamente)
     buffer_write_adv(&session->read_buffer, n);
@@ -117,14 +214,19 @@ static void on_client_read(struct selector_key *key) {
     }
     
     // 4. Como ahora tenemos datos para enviar, nos interesa el evento WRITE
-    selector_set_interest(key->s, key->fd, OP_WRITE);
+    selector_set_interest(key->s, key->fd, OP_WRITE); */
 }
 
 
 //Handler de ESCRITURA: El socket está listo para enviar datos.
 static void on_client_write(struct selector_key *key) {
     client_t *session = key->data;
-    size_t rbytes;
+    unsigned state = stm_handler_write(&session->stm, key);
+    
+    if(state == ERROR || state == DONE) {
+        selector_unregister_fd(key->s, key->fd);
+    }
+   /*  size_t rbytes;
     
     // 1. ¿Qué tengo para mandar?
     uint8_t *read_ptr = buffer_read_ptr(&session->write_buffer, &rbytes);
@@ -143,7 +245,7 @@ static void on_client_write(struct selector_key *key) {
     // 4. Si ya no queda nada en el buffer de salida, volvemos a solo leer
     if (!buffer_can_read(&session->write_buffer)) {
         selector_set_interest(key->s, key->fd, OP_READ);
-    }
+    } */
 }
 
 //Handler de CIERRE: El socket se cerró.
@@ -202,21 +304,21 @@ void echo_service_accept(struct selector_key *key) {
 //lectura para socks5
 static void socks5_client_read(struct selector_key *key) {
 client_t * session= key->data;
-stm_handler_read(session->stm, key); 
+stm_handler_read(&session->stm, key); 
 }
 
 //escritura para socks
 static void socks5_client_write(struct selector_key *key) {
 client_t * session= key->data;
-stm_handler_write(session->stm, key); 
+stm_handler_write(&session->stm, key); 
 }
 
 static void socks5_client_block (struct selector_key *key){
     client_t * session= key->data;
-    stm_handler_block(session->stm, key);
+    stm_handler_block(&session->stm, key);
 }
 
 static void socks5_client_close (struct selector_key *key){
      client_t * session= key->data;
-    stm_handler_close(session->stm, key);
+    stm_handler_close(&session->stm, key);
 }
