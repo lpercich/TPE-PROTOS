@@ -19,6 +19,8 @@
 enum socks_v5state {
     HELLO_READ,
     HELLO_WRITE,
+    AUTH_READ,
+    AUTH_WRITE,
     DONE,
     ERROR,
 };
@@ -32,10 +34,10 @@ typedef struct {
     buffer read_buffer;
     buffer write_buffer;
 
-    union {
+    /* union {
         struct hello_parser hello_st;
         request_parser request_st;
-    }parsers;
+    }parsers; */
 
 
 
@@ -49,6 +51,12 @@ typedef struct {
     //Parsers y datos de estado
     struct hello_parser hello_parser;
     uint8_t chosen_method;
+
+    struct auth_parser auth_parser;
+    auth_credentials credentials; //aca guardamos user/pass recibidos
+
+    //Referencia a los usuarios validos
+    struct socks5args *args;
 } client_t;
 
 
@@ -301,6 +309,68 @@ void echo_service_accept(struct selector_key *key) {
     }
     
     printf("Nueva conexión aceptada en fd %d\n", new_fd);
+}
+
+static bool validate_credentials(client_t *s) {
+    // Iteramos sobre los usuarios configurados en args
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (s->args->users[i].name == NULL) break; // Fin de la lista
+        
+        if (strcmp(s->credentials.username, s->args->users[i].name) == 0 &&
+            strcmp(s->credentials.password, s->args->users[i].pass) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static unsigned on_auth_read(struct selector_key *key) {
+    client_t *s = key->data;
+    bool errored = false;
+
+    // 1. Leer del socket
+    size_t nbyte;
+    uint8_t *ptr = buffer_write_ptr(&s->read_buffer, &nbyte);
+    ssize_t ret = recv(key->fd, ptr, nbyte, 0);
+    if (ret <= 0) return ERROR;
+    buffer_write_adv(&s->read_buffer, ret);
+
+    // 2. Parsear
+    enum auth_state st = auth_consume(&s->read_buffer, &s->auth_parser, &errored);
+
+    if (auth_is_done(st, &errored)) {
+        // 3. Validar Usuario
+        uint8_t status = validate_credentials(s) ? AUTH_SUCCESS : AUTH_FAILURE;
+        
+        // Preparar respuesta
+        if (-1 == auth_marshall(&s->write_buffer, status)) return ERROR;
+        
+        selector_set_interest_key(key, OP_WRITE);
+        return AUTH_WRITE;
+    }
+    if (errored) return ERROR;
+    return AUTH_READ;
+}
+
+static unsigned on_auth_write(struct selector_key *key) {
+    client_t *s = key->data;
+    size_t nbyte;
+    uint8_t *ptr = buffer_read_ptr(&s->write_buffer, &nbyte);
+    
+    ssize_t ret = send(key->fd, ptr, nbyte, MSG_NOSIGNAL);
+    if (ret <= 0) return ERROR;
+    buffer_read_adv(&s->write_buffer, ret);
+
+    if (buffer_can_read(&s->write_buffer)) return AUTH_WRITE;
+
+    // Si la autenticación falló, cerramos la conexión
+    // (Chequeamos el último byte escrito en el buffer antes de avanzar, o guardamos el estado en la struct)
+    // Para simplificar: Si valid_credentials dio true, vamos a REQUEST, si no ERROR.
+    if (validate_credentials(s)) {
+        return REQUEST_READ;
+    } else {
+        return ERROR; // Auth fallida = cerrar conexión
+    }
 }
 
 //AGREGO FUNCIONES PARA IR VIENDO ACCIONES CON STM
