@@ -271,7 +271,7 @@ fail:
 static void
 on_hello_method(struct hello_parser *p, const uint8_t method) {
     uint8_t *selected  = p->data;
-
+    
     if(SOCKS_HELLO_NOAUTHENTICATION_REQUIRED == method) {
        *selected = method;
     }

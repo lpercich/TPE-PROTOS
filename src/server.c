@@ -24,6 +24,11 @@ typedef struct {
     buffer read_buffer;
     buffer write_buffer;
 
+    union {
+        struct hello_parser hello_st;
+        request_parser request_st;
+    }parsers;
+
 
 
     //memoria para los buffers
