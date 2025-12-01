@@ -8,21 +8,29 @@
 #include <stdint.h>
 
 #include "server.h"
+#include "socks5/socks5nio.h"
 #include "lib/buffer.h"
 #include "lib/selector.h"
 
 #define BUFFER_SIZE 4096    
 
 typedef struct {
+    enum socks_v5state state;
     int client_fd;
+    int origin_fd;
 
     //buffers de read y write
     buffer read_buffer;
     buffer write_buffer;
 
+
+
     //memoria para los buffers
     uint8_t read_memory[BUFFER_SIZE];
     uint8_t write_memory[BUFFER_SIZE];
+
+    //estado en el que se encuentra la lectura/parseo
+    struct state_machine *stm;
 } client_t;
 
 static void on_client_read(struct selector_key *key);
@@ -179,4 +187,29 @@ void echo_service_accept(struct selector_key *key) {
     }
     
     printf("Nueva conexión aceptada en fd %d\n", new_fd);
+}
+
+//AGREGO FUNCIONES PARA IR VIENDO ACCIONES CON STM
+
+//CHEQUEAR EN TODAS las funcs SOCKS: deberia actualizar el estado con el ret de la funcion se stm????
+//lectura para socks5
+static void socks5_client_read(struct selector_key *key) {
+client_t * session= key->data;
+stm_handler_read(session->stm, key); 
+}
+
+//escritura para socks
+static void socks5_client_write(struct selector_key *key) {
+client_t * session= key->data;
+stm_handler_write(session->stm, key); 
+}
+
+static void socks5_client_block (struct selector_key *key){
+    client_t * session= key->data;
+    stm_handler_block(session->stm, key);
+}
+
+static void socks5_client_close (struct selector_key *key){
+     client_t * session= key->data;
+    stm_handler_close(session->stm, key);
 }
