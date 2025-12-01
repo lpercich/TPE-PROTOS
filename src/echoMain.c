@@ -108,6 +108,7 @@ int main(const int argc, char **argv) {
     }
 
     // 4. Inicializar Selector. Como es pasivo no necesita write y close
+   //SELECTOR PARA ACEPTAR CONEXIONES
     const struct fd_handler selector_handler = {
         .handle_read = echo_service_accept, 
         .handle_write = NULL,

@@ -62,11 +62,16 @@ static client_t *session_new(int fd) {
     memset(session, 0, sizeof(client_t));
     
     session->client_fd = fd;
+    session->origin_fd = -1;
     
     // Inicializamos los buffers apuntando a los arrays internos
     buffer_init(&session->read_buffer, BUFFER_SIZE, session->read_memory);
     buffer_init(&session->write_buffer, BUFFER_SIZE, session->write_memory);
     
+    session->stm.initial=HELLO_READ;
+    session->stm.max_state=ERROR; //quiza cambiarlo para que no me entre en un loop infinito ¿?
+    stm_init(&session->stm);
+
     return session;
 }
 
@@ -176,6 +181,7 @@ void echo_service_accept(struct selector_key *key) {
         close(new_fd);
         return;
     }
+
     
     // 4. Registrar en el selector
     // Nos interesa leer (OP_READ) inicialmente
