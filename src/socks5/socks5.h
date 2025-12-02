@@ -4,6 +4,7 @@
 #include "auth.h"
 #include "hello.h"
 #include "stm.h"
+#include "request.h"
 
 /** maquina de estados general */
 typedef enum socks_v5state {
@@ -74,8 +75,12 @@ typedef struct {
     auth_credentials credentials; //aca guardamos user/pass recibidos
     bool auth_success;            //resultado de la validación de credenciales
 
+    request_parser request_parser;
+
     //Referencia a los usuarios validos
     struct socks5args *args;
+
+    bool close_after_write; // Flag para cerrar después de vaciar el buffer de salida
 } client_t;
 
 void socks5_init(client_t *s);

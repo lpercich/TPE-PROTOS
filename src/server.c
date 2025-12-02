@@ -56,6 +56,20 @@ static client_t *session_new(int fd) {
   buffer_init(&session->write_buffer, BUFFER_SIZE, session->write_memory);
 
   socks5_init(session);
+  if (session == NULL) {
+    return NULL;
+  }
+  memset(session, 0, sizeof(client_t));
+
+  session->client_fd = fd;
+  session->origin_fd = -1;
+  session->close_after_write = false;
+
+  // Inicializamos los buffers apuntando a los arrays internos
+  buffer_init(&session->read_buffer, BUFFER_SIZE, session->read_memory);
+  buffer_init(&session->write_buffer, BUFFER_SIZE, session->write_memory);
+
+  socks5_init(session);
 
   hello_parser_init(&session->hello_parser);
   session->hello_parser.data = session;
