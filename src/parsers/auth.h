@@ -5,6 +5,11 @@
 #include <stdbool.h>
 #include "buffer.h"
 
+// Constantes del protocolo de autenticación (RFC 1929)
+#define AUTH_VERSION 0x01
+#define AUTH_SUCCESS 0x00
+#define AUTH_FAILURE 0x01
+
 //Estados internos del parser de autenticacion
 enum auth_state {
     AUTH_VERSION_STATE,

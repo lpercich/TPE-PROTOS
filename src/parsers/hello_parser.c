@@ -1,10 +1,13 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include "hello.h"
 
 void hello_parser_init(struct hello_parser *p) {
     p->state = 0;
     p->remaining = 0;
+    p->supports_no_auth = false;
+    p->supports_userpass = false;
 }
 
 enum hello_state hello_consume(buffer *b, struct hello_parser *p, bool *errored) {
@@ -31,7 +34,13 @@ enum hello_state hello_consume(buffer *b, struct hello_parser *p, bool *errored)
                 }
                 break;
             case HELLO_READ_METHODS: //leyendo METHODS
-                //Por ahora solo consumimos los metodos
+                // Guardamos qué métodos soporta el cliente
+                if(c == SOCKS_HELLO_NOAUTHENTICATION_REQUIRED) {
+                    p->supports_no_auth = true;
+                } else if(c == SOCKS_HELLO_USERPASS_AUTH) {
+                    p->supports_userpass = true;
+                }
+                // Callback opcional para procesamiento adicional
                 if(p->on_authentication_method) {
                     p->on_authentication_method(p, c);
                 }

@@ -29,6 +29,7 @@ SRCS = $(SRC_DIR)/echoMain.c \
        $(PARSERS_DIR)/parser_utils.c \
        $(PARSERS_DIR)/hello_parser.c \
        $(PARSERS_DIR)/request_parser.c \
+       $(PARSERS_DIR)/auth.c \
        $(SRC_DIR)/server.c
 
 # Object files

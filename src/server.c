@@ -8,11 +8,12 @@
 #include <stdint.h>
 
 #include "server.h"
-//#include "socks5/socks5nio.h"
 #include "lib/buffer.h"
 #include "lib/selector.h"
 #include "stm.h"
 #include "parsers/hello.h"
+#include "parsers/auth.h"
+#include "args.h"
 
 #define BUFFER_SIZE 4096    
 
@@ -21,6 +22,8 @@ enum socks_v5state {
     HELLO_WRITE,
     AUTH_READ,
     AUTH_WRITE,
+    REQUEST_READ,
+    // estados terminales
     DONE,
     ERROR,
 };
@@ -54,6 +57,7 @@ typedef struct {
 
     struct auth_parser auth_parser;
     auth_credentials credentials; //aca guardamos user/pass recibidos
+    bool auth_success;            //resultado de la validación de credenciales
 
     //Referencia a los usuarios validos
     struct socks5args *args;
@@ -67,6 +71,8 @@ static void on_client_close(struct selector_key *key);
 
 static unsigned on_hello_read(struct selector_key *key);
 static unsigned on_hello_write(struct selector_key *key);
+static unsigned on_auth_read(struct selector_key *key);
+static unsigned on_auth_write(struct selector_key *key);
 
 static const struct fd_handler session_handlers = {
     .handle_read  = on_client_read,
@@ -82,6 +88,18 @@ static const struct state_definition state_definition[] = {
     {
         .state = HELLO_WRITE,
         .on_write_ready = on_hello_write,
+    },
+    {
+        .state = AUTH_READ,
+        .on_read_ready = on_auth_read,
+    },
+    {
+        .state = AUTH_WRITE,
+        .on_write_ready = on_auth_write,
+    },
+    {
+        .state = REQUEST_READ,
+        // TODO: Implementar on_request_read cuando toque
     },
     {
         .state = DONE,
@@ -109,13 +127,27 @@ static unsigned on_hello_read(struct selector_key *key) {
     //Alimento al parser
     enum hello_state state = hello_consume(&session->read_buffer, &session->hello_parser, &errored);
     if(hello_is_done(state, 0)) {
-        //termino el handshake
-        //Calculamos la rta (POR AHORA 0x00 PORQUE NO IMPLEMENTAMOS AUTH)
-        if(-1 == hello_reply(&session->write_buffer,0x00)) {
+        //termino el handshake - elegimos el método de autenticación
+        uint8_t method = SOCKS_HELLO_NO_ACCEPTABLE_METHODS; // Por defecto rechazamos
+        
+        // Priorizamos autenticación con usuario/contraseña si está disponible
+        if(session->hello_parser.supports_userpass) {
+            method = SOCKS_HELLO_USERPASS_AUTH;
+        } else if(session->hello_parser.supports_no_auth) {
+            // Solo aceptamos sin auth si no hay usuarios configurados
+            // (o si queremos permitirlo - por ahora lo dejamos)
+            method = SOCKS_HELLO_NOAUTHENTICATION_REQUIRED;
+        }
+        
+        // Guardamos el método elegido para usarlo en hello_write
+        session->chosen_method = method;
+        
+        // Preparamos la respuesta
+        if(-1 == hello_reply(&session->write_buffer, method)) {
             return ERROR;
         }
 
-        //Cambi de interes a WRITE asi mando la rta
+        //Cambio de interes a WRITE asi mando la rta
         selector_set_interest(key->s, key->fd, OP_WRITE);
         return HELLO_WRITE;
     }
@@ -135,11 +167,29 @@ static unsigned on_hello_write(struct selector_key *key) {
     buffer_read_adv(&session->write_buffer, ret);
     
     if(buffer_can_read(&session->write_buffer)) {
-        return HELLO_WRITE; //ahora falta mandar los datos
+        return HELLO_WRITE; //todavia falta mandar datos
     }
-    //Ya mandamos todo el saludo. EN EL FUTURO ACA PASARIAMOS A REQUEST_READ
-    printf("Handshake completado para el fd %d\n", key->fd);
-    return DONE;
+    
+    // Ya mandamos todo el saludo - transicionamos según el método elegido
+    printf("Handshake completado para el fd %d, método elegido: 0x%02X\n", 
+           key->fd, session->chosen_method);
+    
+    if(session->chosen_method == SOCKS_HELLO_USERPASS_AUTH) {
+        // Inicializar el parser de autenticación
+        session->auth_parser.creds = &session->credentials;
+        auth_parser_init(&session->auth_parser);
+        
+        // Cambiar a lectura para recibir credenciales
+        selector_set_interest(key->s, key->fd, OP_READ); // aca puse read y decia write, chequear
+        return AUTH_READ;
+    } else if(session->chosen_method == SOCKS_HELLO_NOAUTHENTICATION_REQUIRED) {
+        // Sin autenticación, pasamos directo a REQUEST
+        selector_set_interest(key->s, key->fd, OP_READ);
+        return REQUEST_READ;
+    } else {
+        // 0xFF o método no soportado - cerramos conexión
+        return ERROR;
+    }
 }
 
 static void session_destroy(client_t *session) {
@@ -269,8 +319,9 @@ static void on_client_close(struct selector_key *key) {
 }
 
 
-//Handler PÚBLICO: Acepta nuevas conexiones.
-void echo_service_accept(struct selector_key *key) {
+//Handler PÚBLICO: Acepta nuevas conexiones SOCKS5.
+void socksv5_passive_accept(struct selector_key *key) {
+    struct socks5args *args = key->data;  // Obtenemos la configuración del servidor
     struct sockaddr_storage client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     
@@ -296,7 +347,9 @@ void echo_service_accept(struct selector_key *key) {
         close(new_fd);
         return;
     }
-
+    
+    // Vincular la configuración (usuarios para autenticación)
+    new_session->args = args;
     
     // 4. Registrar en el selector
     // Nos interesa leer (OP_READ) inicialmente
@@ -339,13 +392,18 @@ static unsigned on_auth_read(struct selector_key *key) {
     enum auth_state st = auth_consume(&s->read_buffer, &s->auth_parser, &errored);
 
     if (auth_is_done(st, &errored)) {
-        // 3. Validar Usuario
-        uint8_t status = validate_credentials(s) ? AUTH_SUCCESS : AUTH_FAILURE;
+        // 3. Validar Usuario y guardar resultado
+        s->auth_success = validate_credentials(s);
+        uint8_t status = s->auth_success ? AUTH_SUCCESS : AUTH_FAILURE;
+        
+        printf("Auth para fd %d: user='%s' -> %s\n", 
+               key->fd, s->credentials.username, 
+               s->auth_success ? "SUCCESS" : "FAILURE");
         
         // Preparar respuesta
         if (-1 == auth_marshall(&s->write_buffer, status)) return ERROR;
         
-        selector_set_interest_key(key, OP_WRITE);
+        selector_set_interest(key->s, key->fd, OP_WRITE);
         return AUTH_WRITE;
     }
     if (errored) return ERROR;
@@ -363,12 +421,13 @@ static unsigned on_auth_write(struct selector_key *key) {
 
     if (buffer_can_read(&s->write_buffer)) return AUTH_WRITE;
 
-    // Si la autenticación falló, cerramos la conexión
-    // (Chequeamos el último byte escrito en el buffer antes de avanzar, o guardamos el estado en la struct)
-    // Para simplificar: Si valid_credentials dio true, vamos a REQUEST, si no ERROR.
-    if (validate_credentials(s)) {
+    // Usamos el resultado guardado en on_auth_read
+    if (s->auth_success) {
+        printf("Auth exitosa, pasando a REQUEST_READ para fd %d\n", key->fd);
+        selector_set_interest(key->s, key->fd, OP_READ);
         return REQUEST_READ;
     } else {
+        printf("Auth fallida, cerrando conexión fd %d\n", key->fd);
         return ERROR; // Auth fallida = cerrar conexión
     }
 }

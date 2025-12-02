@@ -6,6 +6,7 @@
 #include "buffer.h"
 
 #define SOCKS_HELLO_NOAUTHENTICATION_REQUIRED 0x00
+#define SOCKS_HELLO_USERPASS_AUTH 0x02
 #define SOCKS_HELLO_NO_ACCEPTABLE_METHODS 0xFF
 
 enum hello_state {
@@ -21,6 +22,9 @@ struct hello_parser {
     void (*on_authentication_method)(struct hello_parser *p, uint8_t method);
     int state;
     uint8_t remaining;
+    // Flags para indicar qué métodos soporta el cliente
+    bool supports_no_auth;      // 0x00 - No authentication required
+    bool supports_userpass;     // 0x02 - Username/Password authentication
 };
 
 void hello_parser_init(struct hello_parser *p);

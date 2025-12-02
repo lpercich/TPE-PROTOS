@@ -134,7 +134,8 @@ int main(const int argc, char **argv) {
         return 1;
     }
 
-    selector_status ss = selector_register(selector, server_socket, &selector_handler, OP_READ, NULL);
+    // Pasamos &args como data para que el handler pueda acceder a los usuarios configurados
+    selector_status ss = selector_register(selector, server_socket, &selector_handler, OP_READ, &args);
     if (ss != SELECTOR_SUCCESS) {
         fprintf(stderr, "Fallo registrando servidor: %s\n", selector_error(ss));
         selector_destroy(selector);
@@ -148,7 +149,7 @@ int main(const int argc, char **argv) {
     signal(SIGTERM, sig_handler);
     signal(SIGINT, sig_handler);
 
-    printf("Echo Server escuchando en %s:%s...\n", args.socks_addr, port_str);
+    printf("SOCKS5 Server escuchando en %s:%s...\n", args.socks_addr, port_str);
 
     while (!terminate) {
         ss = selector_select(selector);
