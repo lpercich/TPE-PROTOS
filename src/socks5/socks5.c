@@ -2,15 +2,22 @@
 #include <hello.h>
 #include "stm.h"
 #include "selector.h"
+#include "parsers/request.h"
 #include <sys/socket.h>
 #include <stdio.h>
 #include <string.h>
 #include "args.h"
+#include <errno.h>
 
 static unsigned on_hello_write(struct selector_key *key);
 static unsigned on_hello_read(struct selector_key *key);
 static unsigned on_auth_read(struct selector_key *key);
 static unsigned on_auth_write(struct selector_key *key);
+static void on_request(const unsigned state, struct selector_key *key);
+static unsigned on_request_read(struct selector_key *key);
+static unsigned on_request_write(struct selector_key *key);
+
+
 
 static const struct state_definition socks5_states[] = {
     [HELLO_READ] = {
@@ -31,9 +38,12 @@ static const struct state_definition socks5_states[] = {
     },
     [REQUEST_READ] = { 
         .state = REQUEST_READ,
+        .on_arrival = on_request,
+        .on_read_ready  = on_request_read,
     },
     [REQUEST_WRITE]= { 
         .state = REQUEST_WRITE,
+        .on_write_ready = on_request_write,
     },
     [COPY]         = { 
         .state = COPY,
@@ -55,6 +65,9 @@ void socks5_init(client_t *s) {
     //capaz cambiarlo para que no sea loop infinito (?
 }
 
+static void on_request(const unsigned state, struct selector_key *key) {
+    selector_set_interest_key(key, OP_READ);
+}
 
 static bool validate_credentials(client_t *s) {
     // Iteramos sobre los usuarios configurados en args
@@ -131,9 +144,8 @@ static unsigned on_hello_write(struct selector_key *key) {
     }
     
     // Ya mandamos todo el saludo - transicionamos según el método elegido
-    printf("Handshake completado para el fd %d, método elegido: 0x%02X\n", 
-           key->fd, session->chosen_method);
-    
+    printf("Handshake completado para el fd %d, método elegido: 0x%02X\n", key->fd, session->chosen_method);
+
     if(session->chosen_method == SOCKS_HELLO_USERPASS_AUTH) {
         // Inicializar el parser de autenticación
         session->auth_parser.creds = &session->credentials;
@@ -205,5 +217,84 @@ static unsigned on_auth_write(struct selector_key *key) {
         printf("Auth fallida, cerrando conexión fd %d\n", key->fd);
         return ERROR; // Auth fallida = cerrar conexión
     }
+}
+
+static unsigned on_request_read(struct selector_key *key) {
+    printf("Adentro de on_request_read\n");
+    client_t *s = key->data;
+    bool errored = false;
+
+    // 1) Leer del socket
+    size_t space;
+    uint8_t *dst = buffer_write_ptr(&s->read_buffer, &space);
+    ssize_t ret = recv(key->fd, dst, space, 0);
+    if (ret <= 0) return ERROR;
+    buffer_write_adv(&s->read_buffer, ret);
+    // 2) Parsear el mensaje 
+    request_state rstate = request_consume(&s->read_buffer, &s->request_parser, &errored);
+    printf("salimos de request_consume\n");
+    if (errored) {
+        printf("errored\n");
+        return ERROR;
+    }
+
+    // 3) Terminó la request?
+    if (request_is_done(rstate, &errored)) {
+        printf("entre al if de request is done\n");
+        // Por ahora solo soportamos CONNECT. (TODO los otros commandos)
+        if (s->request_parser.cmd != 0x01) {
+            return ERROR;    
+        }
+
+        // 4) Construyo el reply 
+        request_reply reply;
+        memset(&reply, 0, sizeof(reply));
+
+        reply.version = SOCKS5_VERSION;
+        reply.status  = 0x00;    // éxito
+        reply.bnd.atyp = ATYP_IPV4;
+        reply.bnd.port = 0;      // 0.0.0.0:0 (sin origen real todavía)
+        memset(reply.bnd.addr, 0, 4);
+
+        if (request_marshall(&s->write_buffer, &reply) < 0) {
+            return ERROR;
+        }
+
+        // 5) Escribimos
+        selector_set_interest(key->s, key->fd, OP_WRITE);
+        return REQUEST_WRITE;
+    }
+
+    //Todavía falta recibir bytes
+    return REQUEST_READ;
+}
+
+static unsigned on_request_write(struct selector_key *key) {
+    client_t *s = key->data;
+
+    //1) Qué hay para mandar?
+    size_t nbytes;
+    uint8_t *ptr = buffer_read_ptr(&s->write_buffer, &nbytes);
+
+    if (nbytes == 0) {
+        return ERROR;   // no debería pasar
+    }
+
+    //  2) Enviar
+    ssize_t n = send(key->fd, ptr, nbytes, MSG_NOSIGNAL);
+    if (n <= 0) {
+        return ERROR;
+    }
+
+    buffer_read_adv(&s->write_buffer, n);
+
+    // 3) Queda por enviar?
+    if (buffer_can_read(&s->write_buffer)) {
+        return REQUEST_WRITE;
+    }
+
+    // 4) pasamos a COPY 
+    selector_set_interest(key->s, key->fd, OP_READ);
+    return COPY;
 }
 
