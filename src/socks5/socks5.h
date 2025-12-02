@@ -79,6 +79,8 @@ typedef struct {
 
     //Referencia a los usuarios validos
     struct socks5args *args;
+
+    bool close_after_write; // Flag para cerrar después de vaciar el buffer de salida
 } client_t;
 
 void socks5_init(client_t *s);

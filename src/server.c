@@ -50,6 +50,7 @@ static client_t *session_new(int fd) {
 
   session->client_fd = fd;
   session->origin_fd = -1;
+  session->close_after_write = false;
 
   // Inicializamos los buffers apuntando a los arrays internos
   buffer_init(&session->read_buffer, BUFFER_SIZE, session->read_memory);

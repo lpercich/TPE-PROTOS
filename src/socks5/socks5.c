@@ -17,7 +17,40 @@ static void on_request(const unsigned state, struct selector_key *key);
 static unsigned on_request_read(struct selector_key *key);
 static unsigned on_request_write(struct selector_key *key);
 
+static unsigned copy_read(struct selector_key *key) {
+    client_t *s = key->data;
+    
+    // Usamos un buffer temporal para sacar los datos del socket
+    // (No usamos s->read_buffer para no ensuciarlo por ahora)
+    uint8_t buf[1024];
+    ssize_t n = recv(key->fd, buf, sizeof(buf), 0);
+    
+    if (n > 0) {
+        // ¡Llegaron datos! Esto es lo que curl le mandó a Google
+        // Como agregaste un '\0' al final podrías imprimirlo como string
+        buf[n] = 0; 
+        printf("COPY (Dummy): Recibí %zd bytes: %s\n", n, (char*)buf);
+        
+        // MANTENER VIVA: Retornamos COPY para seguir en este estado
+        // esperando más datos o que el otro lado responda.
+        return COPY; 
+    } 
+    
+    if (n == 0) {
+        printf("COPY: El cliente cerró la conexión.\n");
+        return DONE; // Recién acá cerramos nosotros
+    }
 
+    if (n < 0) {
+        // Si es error de bloqueo, seguimos esperando
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return COPY;
+        }
+        perror("COPY recv");
+        return ERROR;
+    }
+    return COPY;
+}
 
 static const struct state_definition socks5_states[] = {
     [HELLO_READ] = {
@@ -47,6 +80,7 @@ static const struct state_definition socks5_states[] = {
     },
     [COPY]         = { 
         .state = COPY,
+        .on_read_ready  = copy_read,
     },
     [DONE]         = { 
         .state = DONE 
@@ -219,7 +253,70 @@ static unsigned on_auth_write(struct selector_key *key) {
     }
 }
 
+static unsigned process_request(struct selector_key *key) {
+    client_t *s = key->data;
+    request_parser *p = &s->request_parser;
+
+    printf("Request recibido: CMD=%d, ATYP=%d\n", p->cmd, p->atyp);
+
+    // Solo soportamos comando CONNECT (0x01)
+    if (p->cmd != 0x01) {
+        return ERROR; // O responder 'Command not supported'
+    }
+
+    // --- MOCK DE CONEXIÓN EXITOSA (Para probar el flujo) ---
+    // Fingimos que nos conectamos exitosamente al destino
+    
+    request_reply reply = {
+        .version = 0x05,
+        .status = 0x00, // Success
+        .bnd.atyp = ATYP_IPV4,
+        .bnd.addr = {0},
+        .bnd.port = 0
+    };
+    
+    // Escribimos la respuesta "Falsa" en el buffer de salida
+    if (-1 == request_marshall(&s->write_buffer, &reply)) {
+        return ERROR;
+    }
+    
+    // Pasamos a escribir la respuesta al cliente
+    selector_set_interest_key(key, OP_WRITE);
+    return REQUEST_WRITE;
+}
+
 static unsigned on_request_read(struct selector_key *key) {
+    client_t *s = key->data;
+    
+    // 1. Escribir en el buffer lo que llega del socket
+    size_t wbytes;
+    uint8_t *ptr = buffer_write_ptr(&s->read_buffer, &wbytes);
+    ssize_t ret = recv(key->fd, ptr, wbytes, 0);
+
+    if (ret <= 0) {
+        return ERROR; // Cierre o error de conexión
+    }
+    buffer_write_adv(&s->read_buffer, ret);
+
+    // 2. Alimentar al parser de Request
+    bool errored = false;
+    request_state st = request_consume(&s->read_buffer, &s->request_parser, &errored);
+
+    if (request_is_done(st, &errored)) {
+        // ¡Tenemos el pedido completo! (Ej: CONNECT google.com:80)
+        // Procesamos el pedido (ver siguiente función)
+        return process_request(key);
+    }
+
+    if (errored) {
+        // TODO: Aquí deberíamos responder error 0x01 antes de cerrar
+        return ERROR;
+    }
+
+    return REQUEST_READ; // Faltan datos, seguimos esperando
+}
+
+/* static unsigned on_request_read(struct selector_key *key) {
     printf("Adentro de on_request_read\n");
     client_t *s = key->data;
     bool errored = false;
@@ -268,8 +365,8 @@ static unsigned on_request_read(struct selector_key *key) {
     //Todavía falta recibir bytes
     return REQUEST_READ;
 }
-
-static unsigned on_request_write(struct selector_key *key) {
+ */
+/* static unsigned on_request_write(struct selector_key *key) {
     client_t *s = key->data;
 
     //1) Qué hay para mandar?
@@ -297,4 +394,27 @@ static unsigned on_request_write(struct selector_key *key) {
     selector_set_interest(key->s, key->fd, OP_READ);
     return COPY;
 }
+ */
 
+ static unsigned on_request_write(struct selector_key *key) {
+    client_t *s = key->data;
+    size_t nbyte;
+    uint8_t *ptr = buffer_read_ptr(&s->write_buffer, &nbyte);
+    
+    ssize_t ret = send(key->fd, ptr, nbyte, MSG_NOSIGNAL);
+    if (ret <= 0) return ERROR;
+    
+    buffer_read_adv(&s->write_buffer, ret);
+    
+    if (buffer_can_read(&s->write_buffer)) {
+        return REQUEST_WRITE; // Falta enviar
+    }
+    
+    // Ya le dijimos al cliente "OK, conectado".
+    // Ahora pasamos al estado COPY (Túnel).
+    // Como aún no tenemos túnel real, usaremos el handler 'on_copy_read'
+    // que implementamos antes para leer y descartar (y evitar crash).
+    
+    selector_set_interest_key(key, OP_READ);
+    return COPY;
+}
