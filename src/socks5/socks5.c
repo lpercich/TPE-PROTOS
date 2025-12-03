@@ -2,14 +2,15 @@
 #include "parsers/request.h"
 #include "selector.h"
 #include "stm.h"
+#include <arpa/inet.h>
 #include <errno.h>
 #include <hello.h>
+#include <server.h>
 #include <socks5.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <server.h>
-#include <arpa/inet.h>
 
 static unsigned on_hello_write(struct selector_key *key);
 static unsigned on_hello_read(struct selector_key *key);
@@ -20,8 +21,25 @@ static unsigned on_request_read(struct selector_key *key);
 static unsigned on_request_write(struct selector_key *key);
 static unsigned copy_write(struct selector_key *key);
 static unsigned copy_read(struct selector_key *key);
+static unsigned request_connect_init(const unsigned state,
+                                     struct selector_key *key);
+static unsigned request_connect_done(struct selector_key *key);
+
+static void socks5_client_read(struct selector_key *key);
+static void socks5_client_write(struct selector_key *key);
+static void socks5_client_close(struct selector_key *key);
+static void socks5_client_block(struct selector_key *key);
+
+extern const struct fd_handler *get_session_handler();
 
 extern const struct fd_handler session_handlers;
+
+static const struct fd_handler socks5_handler = {
+    .handle_read = socks5_client_read,
+    .handle_write = socks5_client_write,
+    .handle_close = socks5_client_close,
+    .handle_block = socks5_client_block,
+};
 
 static const struct state_definition socks5_states[] = {
     [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read},
@@ -55,6 +73,13 @@ static const struct state_definition socks5_states[] = {
         {
             .state = COPY,
             .on_read_ready = copy_read,
+            .on_write_ready = copy_write,
+        },
+    [REQUEST_CONNECT] =
+        {
+            .state = REQUEST_CONNECT,
+            .on_arrival = NULL,
+            .on_write_ready = request_connect_done,
         },
     [DONE] = {.state = DONE},
     [ERROR] = {.state = ERROR},
@@ -256,64 +281,212 @@ static unsigned process_request(struct selector_key *key) {
 
   printf("Request recibido: CMD=%d, ATYP=%d\n", p->cmd, p->atyp);
 
-  struct sockaddr_storage *dest_addr = malloc(sizeof(struct sockaddr_storage));
-  if(dest_addr == NULL){
-    return ERROR; //fallo el malloc
-  } 
-  memset(dest_addr, 0, sizeof(struct sockaddr_storage));
-  // Solo soportamos comando CONNECT (0x01)
+  // 1. Validar comando (Solo soportamos CONNECT 0x01)
   if (p->cmd != 0x01) {
-    return ERROR; // O responder 'Command not supported'
+    // return request_write_error(key, 0x07); // Command not supported
+    return ERROR;
   }
 
-  switch (p->atyp)
-  {
-  case ATYP_IPV4:
-    struct sockaddr_in * ip4 = dest_addr;
+  // 2. Preparar la dirección en la estructura persistente
+  s->origin_domain = AF_INET;
+  memset(&s->origin_addr, 0, sizeof(s->origin_addr));
+
+  switch (p->atyp) {
+  case ATYP_IPV4: {
+    s->origin_domain = AF_INET;
+    s->origin_addr_len = sizeof(struct sockaddr_in);
+
+    struct sockaddr_in *ip4 = (struct sockaddr_in *)&s->origin_addr;
     ip4->sin_family = AF_INET;
-    ip4->sin_port = htons(p->port); //chequear
-    ip4->sin_addr.s_addr = p->addr;
-    break;
-
-  case ATYP_DOMAIN:
-  //TODO: queda pendiente para cuando tengmos la resol de nombres
-  break;
-  case ATYP_IPV6:
-  struct sockaddr_in6 * ip6 = dest_addr;
-  break;
-  
-  default:
-  return ERROR;
+    ip4->sin_port = htons(p->port);
+    // Copiamos los 4 bytes del array al struct
+    memcpy(&ip4->sin_addr, p->addr, 4);
     break;
   }
-  /*
-  switch( p->cmd) {
-        case SOCKS5_CMD_CONNECT:
+
+  case ATYP_IPV6: {
+    s->origin_domain = AF_INET6;
+    s->origin_addr_len = sizeof(struct sockaddr_in6);
+
+    struct sockaddr_in6 *ip6 = (struct sockaddr_in6 *)&s->origin_addr;
+    ip6->sin6_family = AF_INET6;
+    ip6->sin6_port = htons(p->port);
+    // Copiamos los 16 bytes del array al struct
+    memcpy(&ip6->sin6_addr, p->addr, 16);
+    break;
+  }
+
+  case ATYP_DOMAIN: {
+    // TODO: Resolver DNS (Próxima etapa)
+    // Por ahora devolvemos error si piden dominio
+    return ERROR;
+  }
+
+  default:
+    return ERROR; // Tipo no soportado
+  }
+
+  s->origin_fd = socket(s->origin_domain, SOCK_STREAM, 0);
+  if (s->origin_fd == -1) {
+    return ERROR; // O request_write_error(key, 0x01);
+  }
+
+  if (selector_fd_set_nio(s->origin_fd) == -1) {
+    close(s->origin_fd);
+    return ERROR;
+  }
+
+  int ret = connect(s->origin_fd, (struct sockaddr *)&s->origin_addr,
+                    s->origin_addr_len);
+
+  if (ret == -1) {
+    if (errno == EINPROGRESS) {
+      // Conexión en curso: Registramos el origen en el selector
+      // IMPORTANTE: Usamos el mismo handler que el cliente (ver punto 3 abajo)
+      selector_status ss =
+          selector_register(key->s, s->origin_fd, &socks5_handler, OP_WRITE, s);
+      if (ss != SELECTOR_SUCCESS) {
+        close(s->origin_fd);
+        return ERROR;
+      }
+      s->references++; // Incrementamos referencias porque ahora hay dos FDs
+                       // apuntando a s
+      // Pausamos lectura del cliente
+      selector_set_interest_key(key, OP_NOOP);
+
+      return REQUEST_CONNECT; // Vamos a esperar a que conecte
+    }
+
+    // Falló connect inmediato - enviar error apropiado
+    int saved_errno = errno;
+    close(s->origin_fd);
+    s->origin_fd = -1;
+
+    // Preparar respuesta de error
+    request_reply reply = {
+        .version = 0x05,
+        .status = (saved_errno == ENETUNREACH || saved_errno == EHOSTUNREACH)
+                      ? 0x04
+                      : 0x01, // 0x04 = Host unreachable, 0x01 = General failure
+        .bnd.atyp = ATYP_IPV4,
+        .bnd.addr = {0},
+        .bnd.port = 0};
+
+    if (-1 == request_marshall(&s->write_buffer, &reply)) {
+      return ERROR;
+    }
+
+    s->close_after_write = true;
+    selector_set_interest_key(key, OP_WRITE);
+    return REQUEST_WRITE;
+  }
+
+  // Conectó inmediato (raro) -> Llamar a success directo o ir a estado
+  // intermedio
+  return REQUEST_CONNECT; // Dejamos que el selector nos avise WRITE igual para
+                          // simplificar
+}
+
+/* static unsigned request_connect_init(const unsigned state, struct
+selector_key *key) { client_t *s = key->data;
+
+    // 1. Crear socket origen
+    s->origin_fd = socket(s->origin_domain, SOCK_STREAM, 0);
+    if (s->origin_fd == -1) return ERROR;
+
+    // 2. No Bloqueante
+    if (selector_fd_set_nio(s->origin_fd) == -1) {
+        close(s->origin_fd);
+        return ERROR;
+    }
+
+    // 3. Iniciar conexión
+    int ret = connect(s->origin_fd, (struct sockaddr *)&s->origin_addr,
+s->origin_addr_len);
+
+    if (ret == -1) {
+        if (errno == EINPROGRESS) {
+            // Esperamos a que conecte: registramos OP_WRITE en el nuevo socket
+            selector_status ss = selector_register(key->s, s->origin_fd,
+get_socks5_handler(), OP_WRITE, s); if (ss != SELECTOR_SUCCESS) {
+                close(s->origin_fd);
+                return ERROR;
+            }
+            // Pausamos al cliente mientras tanto
+            selector_set_interest_key(key, OP_NOOP);
             return REQUEST_CONNECT;
-        case SOCKS5_CMD_BIND:
-            return REQUEST_BIND;
-        case SOCKS5_CMD_UDP_ASSOCIATE:
-            return REQUEST_UDP_ASSOCIATE;
-        default:
-            return ERROR;
-    }*/
+        }
+        // Error real
+        close(s->origin_fd);
+        return ERROR;
+    }
 
-  // --- MOCK DE CONEXIÓN EXITOSA (Para probar el flujo) ---
-  // Fingimos que nos conectamos exitosamente al destino
+    return ERROR;
+} */
 
+static unsigned request_connect_success(struct selector_key *key) {
+  client_t *s = key->data;
+
+  // 1. Armar respuesta OK (Esto está bien)
   request_reply reply = {.version = 0x05,
-                         .status = 0x00, // Success
+                         .status = 0x00,
                          .bnd.atyp = ATYP_IPV4,
                          .bnd.addr = {0},
                          .bnd.port = 0};
 
-  // Escribimos la respuesta "Falsa" en el buffer de salida
-  if (-1 == request_marshall(&s->write_buffer, &reply)) {
+  if (-1 == request_marshall(&s->write_buffer, &reply))
     return ERROR;
-  }
 
-  // Pasamos a escribir la respuesta al cliente
-  return on_request_write(key);
+  // 2. Configurar intereses COPY
+  // IMPORTANTE: Activamos OP_WRITE en el CLIENTE para que el selector
+  // llame a 'on_request_write' con la key correcta en el próximo ciclo.
+  selector_set_interest(key->s, s->client_fd, OP_WRITE);
+
+  // Escuchamos al origen (Google) por si manda datos
+  selector_set_interest(key->s, s->origin_fd, OP_READ);
+
+  // 3. Setup punteros COPY
+  s->buf_client_to_origin = &s->read_buffer;
+  s->buf_origin_to_client = &s->write_buffer;
+
+  // Transicionamos al estado de escritura.
+  // El selector se encargará de ejecutar on_request_write sobre client_fd.
+  return REQUEST_WRITE;
+}
+
+static unsigned request_connect_done(struct selector_key *key) {
+  client_t *s = key->data;
+  int error = 0;
+  socklen_t len = sizeof(error);
+
+  // Chequeamos si conectó
+  if (getsockopt(key->fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
+    error = errno;
+
+  if (error == 0) {
+    return request_connect_success(key);
+  } else {
+    // Falló: enviar error apropiado al cliente
+    selector_unregister_fd(key->s, s->origin_fd);
+    close(s->origin_fd);
+    s->origin_fd = -1;
+
+    // Preparar respuesta de error
+    request_reply reply = {
+        .version = 0x05,
+        .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? 0x04 : 0x01,
+        .bnd.atyp = ATYP_IPV4,
+        .bnd.addr = {0},
+        .bnd.port = 0};
+
+    if (-1 == request_marshall(&s->write_buffer, &reply)) {
+      return ERROR;
+    }
+
+    s->close_after_write = true;
+    selector_set_interest(key->s, s->client_fd, OP_WRITE);
+    return REQUEST_WRITE;
+  }
 }
 
 static unsigned copy_read(struct selector_key *key) {
@@ -321,8 +494,10 @@ static unsigned copy_read(struct selector_key *key) {
   int fd = key->fd;
   bool is_client_fd = (fd == s->client_fd);
 
-  int origin_fd = is_client_fd ? s->origin_fd : s->client_fd; 
-  buffer *buffer = is_client_fd ? &s->write_buffer : &s->origin_write_buffer;
+  int origin_fd = is_client_fd ? s->origin_fd : s->client_fd;
+  // Si leo del cliente, escribo en el buffer que lee el origen (read_buffer)
+  // Si leo del origen, escribo en el buffer que lee el cliente (write_buffer)
+  buffer *buffer = is_client_fd ? &s->read_buffer : &s->write_buffer;
 
   size_t space;
 
@@ -333,8 +508,15 @@ static unsigned copy_read(struct selector_key *key) {
     perror("COPY recv");
     return ERROR;
   }
-  if( n == 0) {
-    printf("COPY: El cliente cerró la conexión.\n");
+  if (n == 0) {
+    if (key->fd == s->client_fd) {
+      printf("COPY: El CLIENTE cerró la conexión.\n");
+    } else {
+      printf("COPY: El ORIGEN cerró la conexión.\n");
+    }
+
+    // Mark for cleanup - don't unregister here as it frees the session!
+    s->close_after_write = true;
     return DONE;
   }
 
@@ -344,7 +526,6 @@ static unsigned copy_read(struct selector_key *key) {
   selector_set_interest_key(key, buffer_can_write(buffer) ? OP_READ : OP_NOOP);
 
   return s->stm.current->state;
-
 }
 
 static unsigned copy_write(struct selector_key *key) {
@@ -353,7 +534,10 @@ static unsigned copy_write(struct selector_key *key) {
   bool is_client_fd = (fd == s->client_fd);
 
   int origin_fd = is_client_fd ? s->origin_fd : s->client_fd;
-  buffer *buffer = is_client_fd ? &s->origin_write_buffer : &s->write_buffer;
+  // Si escribo al cliente, leo del buffer donde escribe el origen
+  // (write_buffer) Si escribo al origen, leo del buffer donde escribe el
+  // cliente (read_buffer)
+  buffer *buffer = is_client_fd ? &s->write_buffer : &s->read_buffer;
 
   size_t to_send;
 
@@ -377,7 +561,8 @@ static unsigned copy_write(struct selector_key *key) {
 
   selector_set_interest_key(key, interest);
 
-  if (is_client_fd && !buffer_can_read(&s->origin_write_buffer) && s->stm.current->state == REQUEST_WRITE) {
+  if (is_client_fd && !buffer_can_read(&s->write_buffer) &&
+      s->stm.current->state == REQUEST_WRITE) {
     s->stm.current = &s->stm.states[COPY];
     selector_set_interest_key(key, OP_READ);
     selector_register(key->s, s->origin_fd, &session_handlers, OP_READ, s);
@@ -385,7 +570,6 @@ static unsigned copy_write(struct selector_key *key) {
   }
 
   return s->stm.current->state;
-  
 }
 
 static unsigned on_request_read(struct selector_key *key) {
@@ -398,8 +582,8 @@ static unsigned on_request_read(struct selector_key *key) {
 
   if (ret < 0) {
     return ERROR; // Error de conexión
-  } else if (ret == 0){
-    return DONE; //cerro conexion
+  } else if (ret == 0) {
+    return DONE; // cerro conexion
   }
   buffer_write_adv(&s->read_buffer, ret);
 
@@ -411,9 +595,9 @@ static unsigned on_request_read(struct selector_key *key) {
   if (request_is_done(st, &errored)) {
     // ¡Tenemos el pedido completo! (Ej: CONNECT google.com:80)
     // Procesamos el pedido (ver siguiente función)
-    if(!errored){
+    if (!errored) {
       return process_request(key);
-    } else{
+    } else {
       return ERROR;
     }
   }
@@ -528,11 +712,92 @@ static unsigned on_request_write(struct selector_key *key) {
     return REQUEST_WRITE; // Falta enviar
   }
 
+  // Si habíamos marcado que esto era un error fatal (ej: Auth fallida o Comando
+  // inválido), cerramos.
+  if (s->close_after_write) {
+    return ERROR; // El selector cerrará el socket
+  }
+
   // Ya le dijimos al cliente "OK, conectado".
   // Ahora pasamos al estado COPY (Túnel).
   // Como aún no tenemos túnel real, usaremos el handler 'on_copy_read'
   // que implementamos antes para leer y descartar (y evitar crash).
 
   selector_set_interest_key(key, OP_READ);
+  // Verificar si quedaron datos del cliente pendientes de envío al origen
+  if (s->origin_fd != -1) {
+    if (buffer_can_read(s->buf_client_to_origin)) {
+      // Si hay datos remanentes (el GET), activamos escritura en el origen
+      selector_set_interest(key->s, s->origin_fd, OP_WRITE | OP_READ);
+    } else {
+      // Si está vacío, solo escuchamos
+      selector_set_interest(key->s, s->origin_fd, OP_READ);
+    }
+  }
+  // ------------------
+
   return COPY;
 }
+
+static void socks5_client_read(struct selector_key *key) {
+  client_t *session = key->data;
+  // Guardamos el estado al que transicionó
+  unsigned state = stm_handler_read(&session->stm, key);
+
+  // Si terminamos o hubo error, cerramos todo
+  if (state == DONE || state == ERROR) {
+    // If we're in COPY state and closing, we need to unregister BOTH FDs
+    // to prevent the other FD from accessing the freed session
+    int other_fd = -1;
+    if (key->fd == session->client_fd) {
+      other_fd = session->origin_fd;
+    } else if (key->fd == session->origin_fd) {
+      other_fd = session->client_fd;
+    }
+
+    // Unregister the current FD (will call socks5_client_close)
+    selector_unregister_fd(key->s, key->fd);
+
+    // If there's another FD, unregister it too
+    if (other_fd >= 0) {
+      selector_unregister_fd(key->s, other_fd);
+    }
+  }
+}
+
+static void socks5_client_write(struct selector_key *key) {
+  client_t *session = key->data;
+  unsigned state = stm_handler_write(&session->stm, key);
+
+  if (state == DONE || state == ERROR) {
+    selector_unregister_fd(key->s, key->fd);
+  }
+}
+
+static void socks5_client_block(struct selector_key *key) {
+  client_t *session = key->data;
+  stm_handler_block(&session->stm, key);
+}
+
+static void socks5_client_close(struct selector_key *key) {
+  client_t *session = key->data;
+
+  if (session == NULL) {
+    return;
+  }
+
+  stm_handler_close(&session->stm, key);
+
+  // Mark this FD as already closed so session_destroy doesn't try to close it
+  // again
+  if (key->fd == session->client_fd) {
+    session->client_fd = -1;
+  } else if (key->fd == session->origin_fd) {
+    session->origin_fd = -1;
+  }
+
+  // Use session_destroy which handles reference counting properly
+  session_destroy(session);
+}
+
+const struct fd_handler *get_session_handler(void) { return &session_handlers; }

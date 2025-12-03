@@ -31,12 +31,18 @@ const struct fd_handler session_handlers = {
     .handle_close = on_client_close,
 };
 
-static void session_destroy(client_t *session) {
+void session_destroy(client_t *session) {
   if (session != NULL) {
-    if (session->client_fd >= 0) {
-      close(session->client_fd);
+    session->references--;
+    if (session->references == 0) {
+      if (session->client_fd >= 0) {
+        close(session->client_fd);
+      }
+      if (session->origin_fd >= 0) {
+        close(session->origin_fd);
+      }
+      free(session);
     }
-    free(session);
   }
 }
 
@@ -64,6 +70,7 @@ static client_t *session_new(int fd) {
   session->client_fd = fd;
   session->origin_fd = -1;
   session->close_after_write = false;
+  session->references = 1;
 
   // Inicializamos los buffers apuntando a los arrays internos
   buffer_init(&session->read_buffer, BUFFER_SIZE, session->read_memory);
@@ -222,23 +229,3 @@ void socksv5_passive_accept(struct selector_key *key) {
 
 // CHEQUEAR EN TODAS las funcs SOCKS: deberia actualizar el estado con el ret de
 // la funcion se stm???? lectura para socks5
-static void socks5_client_read(struct selector_key *key) {
-  client_t *session = key->data;
-  stm_handler_read(&session->stm, key);
-}
-
-// escritura para socks
-static void socks5_client_write(struct selector_key *key) {
-  client_t *session = key->data;
-  stm_handler_write(&session->stm, key);
-}
-
-static void socks5_client_block(struct selector_key *key) {
-  client_t *session = key->data;
-  stm_handler_block(&session->stm, key);
-}
-
-static void socks5_client_close(struct selector_key *key) {
-  client_t *session = key->data;
-  stm_handler_close(&session->stm, key);
-}
