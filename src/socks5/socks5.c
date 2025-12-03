@@ -278,11 +278,16 @@ static unsigned process_request(struct selector_key *key) {
 static unsigned copy_read(struct selector_key *key) {
   client_t *s = key->data;
   int fd = key->fd;
-  int peer_fd = (fd == s->client_fd) ? s->origin_fd : s->client_fd; 
-  buffer *wbuf = (fd == s->client_fd) ? &s->write_buffer : &s->origin_write_buffer;
+  bool is_client_fd = (fd == s->client_fd);
+
+  int origin_fd = is_client_fd ? s->origin_fd : s->client_fd; 
+  buffer *buffer = is_client_fd ? &s->write_buffer : &s->origin_write_buffer;
+
   size_t space;
-  uint8_t *dst = buffer_write_ptr(wbuf, &space);
+
+  uint8_t *dst = buffer_write_ptr(buffer, &space);
   ssize_t n = recv(fd, dst, space, 0);
+
   if (n < 0) {
     perror("COPY recv");
     return ERROR;
@@ -292,45 +297,54 @@ static unsigned copy_read(struct selector_key *key) {
     return DONE;
   }
 
-  buffer_write_adv(wbuf, n);
+  buffer_write_adv(buffer, n);
 
-  selector_set_interest(key->s, peer_fd, OP_WRITE);
-  selector_set_interest_key(key, buffer_can_write(wbuf) ? OP_READ : OP_NOOP);
+  selector_set_interest(key->s, origin_fd, OP_WRITE);
+  selector_set_interest_key(key, buffer_can_write(buffer) ? OP_READ : OP_NOOP);
 
   return s->stm.current->state;
 
 }
 
 static unsigned copy_write(struct selector_key *key) {
-    client_t *s = key->data;
-    int fd      = key->fd;
-    int peer_fd = (fd == s->client_fd) ? s->origin_fd : s->client_fd;
-    buffer *rbuf = (fd == s->client_fd) ? &s->origin_write_buffer : &s->write_buffer;
-    size_t to_send;
-    uint8_t *src = buffer_read_ptr(rbuf, &to_send);
-    ssize_t sent = send(fd, src, to_send, MSG_NOSIGNAL);
-    if (sent <= 0) {
-      perror("COPY send");
-        return ERROR;
-    }
-    buffer_read_adv(rbuf, sent);
+  client_t *s = key->data;
+  int fd = key->fd;
+  bool is_client_fd = (fd == s->client_fd);
 
-    selector_set_interest(key->s, peer_fd, OP_READ);
+  int origin_fd = is_client_fd ? s->origin_fd : s->client_fd;
+  buffer *buffer = is_client_fd ? &s->origin_write_buffer : &s->write_buffer;
 
-    unsigned interest = OP_READ;
-    if (buffer_can_read(rbuf)) {
-        interest |= OP_WRITE;
-    }
-    selector_set_interest_key(key, interest);
+  size_t to_send;
 
-    if (fd == s->client_fd && !buffer_can_read(&s->origin_write_buffer) && s->stm.current->state == REQUEST_WRITE) {
-      s->stm.current = &s->stm.states[COPY];
-      selector_set_interest_key(key, OP_READ);
-      selector_register(key->s, s->origin_fd, &sessions_handler, OP_READ, s);
-      return COPY;
-    }
+  uint8_t *src = buffer_read_ptr(buffer, &to_send);
+  ssize_t sent = send(fd, src, to_send, MSG_NOSIGNAL);
 
-    return s->stm.current->state;
+  if (sent <= 0) {
+    perror("COPY send");
+    return ERROR;
+  }
+
+  buffer_read_adv(buffer, sent);
+
+  selector_set_interest(key->s, origin_fd, OP_READ);
+
+  unsigned interest = OP_READ;
+
+  if (buffer_can_read(buffer)) {
+    interest |= OP_WRITE;
+  }
+
+  selector_set_interest_key(key, interest);
+
+  if (is_client_fd && !buffer_can_read(&s->origin_write_buffer) && s->stm.current->state == REQUEST_WRITE) {
+    s->stm.current = &s->stm.states[COPY];
+    selector_set_interest_key(key, OP_READ);
+    selector_register(key->s, s->origin_fd, &sessions_handler, OP_READ, s);
+    return COPY;
+  }
+
+  return s->stm.current->state;
+  
 }
 
 static unsigned on_request_read(struct selector_key *key) {
