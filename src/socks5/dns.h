@@ -5,6 +5,6 @@
 #include <netdb.h>
 #include <pthread.h>
 
-struct dns_resolv_args {}
+void * dns_resolve(void* s_key);
 
 #endif
