@@ -44,14 +44,20 @@ typedef enum socks_v5state {
     ERROR,
 }socks_v5state;
 
+
+
 typedef struct {
     enum socks_v5state state;
     int client_fd;
     int origin_fd;
 
-    //buffers de read y write
+    //buffers de read y write cliente - servidor
     buffer read_buffer;
     buffer write_buffer;
+
+    //buffers de read y write servidor - cliente
+    buffer origin_read_buffer;
+    buffer origin_write_buffer;
 
     /* union {
         struct hello_parser hello_st;
@@ -79,6 +85,8 @@ typedef struct {
 
     //Referencia a los usuarios validos
     struct socks5args *args;
+
+
 
     bool close_after_write; // Flag para cerrar después de vaciar el buffer de salida
 } client_t;
