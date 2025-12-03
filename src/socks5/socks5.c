@@ -16,41 +16,10 @@ static unsigned on_auth_write(struct selector_key *key);
 static void on_request(const unsigned state, struct selector_key *key);
 static unsigned on_request_read(struct selector_key *key);
 static unsigned on_request_write(struct selector_key *key);
+static unsigned copy_write(struct selector_key *key);
+static unsigned copy_read(struct selector_key *key);
 
-static unsigned copy_read(struct selector_key *key) {
-  client_t *s = key->data;
-
-  // Usamos un buffer temporal para sacar los datos del socket
-  // (No usamos s->read_buffer para no ensuciarlo por ahora)
-  uint8_t buf[1024];
-  ssize_t n = recv(key->fd, buf, sizeof(buf), 0);
-
-  if (n > 0) {
-    // ¡Llegaron datos! Esto es lo que curl le mandó a Google
-    // Como agregaste un '\0' al final podrías imprimirlo como string
-    buf[n] = 0;
-    printf("COPY (Dummy): Recibí %zd bytes: %s\n", n, (char *)buf);
-
-    // MANTENER VIVA: Retornamos COPY para seguir en este estado
-    // esperando más datos o que el otro lado responda.
-    return COPY;
-  }
-
-  if (n == 0) {
-    printf("COPY: El cliente cerró la conexión.\n");
-    return DONE; // Recién acá cerramos nosotros
-  }
-
-  if (n < 0) {
-    // Si es error de bloqueo, seguimos esperando
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return COPY;
-    }
-    perror("COPY recv");
-    return ERROR;
-  }
-  return COPY;
-}
+extern const struct fd_handler sessions_handler;
 
 static const struct state_definition socks5_states[] = {
     [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read},
@@ -304,6 +273,64 @@ static unsigned process_request(struct selector_key *key) {
 
   // Pasamos a escribir la respuesta al cliente
   return on_request_write(key);
+}
+
+static unsigned copy_read(struct selector_key *key) {
+  client_t *s = key->data;
+  int fd = key->fd;
+  int peer_fd = (fd == s->client_fd) ? s->origin_fd : s->client_fd; 
+  buffer *wbuf = (fd == s->client_fd) ? &s->write_buffer : &s->origin_write_buffer;
+  size_t space;
+  uint8_t *dst = buffer_write_ptr(wbuf, &space);
+  ssize_t n = recv(fd, dst, space, 0);
+  if (n < 0) {
+    perror("COPY recv");
+    return ERROR;
+  }
+  if( n == 0) {
+    printf("COPY: El cliente cerró la conexión.\n");
+    return DONE;
+  }
+
+  buffer_write_adv(wbuf, n);
+
+  selector_set_interest(key->s, peer_fd, OP_WRITE);
+  selector_set_interest_key(key, buffer_can_write(wbuf) ? OP_READ : OP_NOOP);
+
+  return s->stm.current->state;
+
+}
+
+static unsigned copy_write(struct selector_key *key) {
+    client_t *s = key->data;
+    int fd      = key->fd;
+    int peer_fd = (fd == s->client_fd) ? s->origin_fd : s->client_fd;
+    buffer *rbuf = (fd == s->client_fd) ? &s->origin_write_buffer : &s->write_buffer;
+    size_t to_send;
+    uint8_t *src = buffer_read_ptr(rbuf, &to_send);
+    ssize_t sent = send(fd, src, to_send, MSG_NOSIGNAL);
+    if (sent <= 0) {
+      perror("COPY send");
+        return ERROR;
+    }
+    buffer_read_adv(rbuf, sent);
+
+    selector_set_interest(key->s, peer_fd, OP_READ);
+
+    unsigned interest = OP_READ;
+    if (buffer_can_read(rbuf)) {
+        interest |= OP_WRITE;
+    }
+    selector_set_interest_key(key, interest);
+
+    if (fd == s->client_fd && !buffer_can_read(&s->origin_write_buffer) && s->stm.current->state == REQUEST_WRITE) {
+      s->stm.current = &s->stm.states[COPY];
+      selector_set_interest_key(key, OP_READ);
+      selector_register(key->s, s->origin_fd, &sessions_handler, OP_READ, s);
+      return COPY;
+    }
+
+    return s->stm.current->state;
 }
 
 static unsigned on_request_read(struct selector_key *key) {
