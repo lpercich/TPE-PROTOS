@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <server.h>
+#include <arpa/inet.h>
 
 static unsigned on_hello_write(struct selector_key *key);
 static unsigned on_hello_read(struct selector_key *key);
@@ -19,7 +21,7 @@ static unsigned on_request_write(struct selector_key *key);
 static unsigned copy_write(struct selector_key *key);
 static unsigned copy_read(struct selector_key *key);
 
-extern const struct fd_handler sessions_handler;
+extern const struct fd_handler session_handlers;
 
 static const struct state_definition socks5_states[] = {
     [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read},
@@ -68,6 +70,8 @@ void socks5_init(client_t *s) {
 }
 
 static void on_request(const unsigned state, struct selector_key *key) {
+  client_t *s = key->data;
+  request_parser_init(&s->request_parser);
   selector_set_interest_key(key, OP_READ);
 }
 
@@ -252,10 +256,47 @@ static unsigned process_request(struct selector_key *key) {
 
   printf("Request recibido: CMD=%d, ATYP=%d\n", p->cmd, p->atyp);
 
+  struct sockaddr_storage *dest_addr = malloc(sizeof(struct sockaddr_storage));
+  if(dest_addr == NULL){
+    return ERROR; //fallo el malloc
+  } 
+  memset(dest_addr, 0, sizeof(struct sockaddr_storage));
   // Solo soportamos comando CONNECT (0x01)
   if (p->cmd != 0x01) {
     return ERROR; // O responder 'Command not supported'
   }
+
+  switch (p->atyp)
+  {
+  case ATYP_IPV4:
+    struct sockaddr_in * ip4 = dest_addr;
+    ip4->sin_family = AF_INET;
+    ip4->sin_port = htons(p->port); //chequear
+    ip4->sin_addr = p->addr;
+    break;
+
+  case ATYP_DOMAIN:
+  //TODO: queda pendiente para cuando tengmos la resol de nombres
+  break;
+  case ATYP_IPV6:
+  struct sockaddr_in6 * ip6 = dest_addr;
+  break;
+  
+  default:
+  return ERROR;
+    break;
+  }
+  /*
+  switch( p->cmd) {
+        case SOCKS5_CMD_CONNECT:
+            return REQUEST_CONNECT;
+        case SOCKS5_CMD_BIND:
+            return REQUEST_BIND;
+        case SOCKS5_CMD_UDP_ASSOCIATE:
+            return REQUEST_UDP_ASSOCIATE;
+        default:
+            return ERROR;
+    }*/
 
   // --- MOCK DE CONEXIÓN EXITOSA (Para probar el flujo) ---
   // Fingimos que nos conectamos exitosamente al destino
@@ -339,7 +380,7 @@ static unsigned copy_write(struct selector_key *key) {
   if (is_client_fd && !buffer_can_read(&s->origin_write_buffer) && s->stm.current->state == REQUEST_WRITE) {
     s->stm.current = &s->stm.states[COPY];
     selector_set_interest_key(key, OP_READ);
-    selector_register(key->s, s->origin_fd, &sessions_handler, OP_READ, s);
+    selector_register(key->s, s->origin_fd, &session_handlers, OP_READ, s);
     return COPY;
   }
 
@@ -355,8 +396,10 @@ static unsigned on_request_read(struct selector_key *key) {
   uint8_t *ptr = buffer_write_ptr(&s->read_buffer, &wbytes);
   ssize_t ret = recv(key->fd, ptr, wbytes, 0);
 
-  if (ret <= 0) {
-    return ERROR; // Cierre o error de conexión
+  if (ret < 0) {
+    return ERROR; // Error de conexión
+  } else if (ret == 0){
+    return DONE; //cerro conexion
   }
   buffer_write_adv(&s->read_buffer, ret);
 
@@ -368,7 +411,11 @@ static unsigned on_request_read(struct selector_key *key) {
   if (request_is_done(st, &errored)) {
     // ¡Tenemos el pedido completo! (Ej: CONNECT google.com:80)
     // Procesamos el pedido (ver siguiente función)
-    return process_request(key);
+    if(!errored){
+      return process_request(key);
+    } else{
+      return ERROR;
+    }
   }
 
   if (errored) {

@@ -9,6 +9,7 @@
  * El key->data debe contener un puntero a struct socks5args con la configuración.
  */
 void socksv5_passive_accept(struct selector_key *key);
+extern const struct fd_handler session_handlers;
 
 // Alias para compatibilidad (deprecated)
 #define echo_service_accept socksv5_passive_accept

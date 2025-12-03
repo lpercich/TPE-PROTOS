@@ -1,6 +1,7 @@
 #include "request.h"
 #include <string.h>
 #include <arpa/inet.h>
+#include <stdio.h>
 
 
 void request_parser_init(request_parser *parser) {
