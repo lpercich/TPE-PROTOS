@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netdb.h>
+#include "dns.h"
+
 
 static unsigned on_hello_write(struct selector_key *key);
 static unsigned on_hello_read(struct selector_key *key);
@@ -21,9 +24,9 @@ static unsigned on_request_read(struct selector_key *key);
 static unsigned on_request_write(struct selector_key *key);
 static unsigned copy_write(struct selector_key *key);
 static unsigned copy_read(struct selector_key *key);
-static unsigned request_connect_init(const unsigned state,
-                                     struct selector_key *key);
+static unsigned request_connect_init(const unsigned state, struct selector_key *key);
 static unsigned request_connect_done(struct selector_key *key);
+static unsigned on_request_resolve(struct selector_key *key);
 
 static void socks5_client_read(struct selector_key *key);
 static void socks5_client_write(struct selector_key *key);
@@ -42,47 +45,17 @@ static const struct fd_handler socks5_handler = {
 };
 
 static const struct state_definition socks5_states[] = {
-    [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read},
-    [HELLO_WRITE] =
-        {
-            .state = HELLO_WRITE,
-            .on_write_ready = on_hello_write,
-        },
-    [AUTH_READ] =
-        {
-            .state = AUTH_READ,
-            .on_read_ready = on_auth_read,
-        },
-    [AUTH_WRITE] =
-        {
-            .state = AUTH_WRITE,
-            .on_write_ready = on_auth_write,
-        },
-    [REQUEST_READ] =
-        {
-            .state = REQUEST_READ,
-            .on_arrival = on_request,
-            .on_read_ready = on_request_read,
-        },
-    [REQUEST_WRITE] =
-        {
-            .state = REQUEST_WRITE,
-            .on_write_ready = on_request_write,
-        },
-    [COPY] =
-        {
-            .state = COPY,
-            .on_read_ready = copy_read,
-            .on_write_ready = copy_write,
-        },
-    [REQUEST_CONNECT] =
-        {
-            .state = REQUEST_CONNECT,
-            .on_arrival = NULL,
-            .on_write_ready = request_connect_done,
-        },
-    [DONE] = {.state = DONE},
-    [ERROR] = {.state = ERROR},
+  [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read },
+  [HELLO_WRITE] = { .state = HELLO_WRITE, .on_write_ready = on_hello_write },
+  [AUTH_READ] = { .state = AUTH_READ, .on_read_ready = on_auth_read },
+  [AUTH_WRITE] = { .state = AUTH_WRITE, .on_write_ready = on_auth_write },
+  [REQUEST_READ] = { .state = REQUEST_READ, .on_arrival = on_request, .on_read_ready = on_request_read },
+  [REQUEST_WRITE] = { .state = REQUEST_WRITE, .on_write_ready = on_request_write },
+  [COPY] = { .state = COPY, .on_read_ready = copy_read, .on_write_ready = copy_write },
+  [REQUEST_CONNECT] = { .state = REQUEST_CONNECT, .on_arrival = NULL, .on_write_ready = request_connect_done },
+  [REQUEST_RESOLVE] = { .state = REQUEST_RESOLVE, .on_block_ready = on_request_resolve },
+  [DONE] = { .state = DONE },
+  [ERROR] = { .state = ERROR },
 };
 
 void socks5_init(client_t *s) {
@@ -317,9 +290,16 @@ static unsigned process_request(struct selector_key *key) {
   }
 
   case ATYP_DOMAIN: {
-    // TODO: Resolver DNS (Próxima etapa)
-    // Por ahora devolvemos error si piden dominio
-    return ERROR;
+    struct selector_key *k = malloc(sizeof(*k));
+    *k = *key;
+    
+    pthread_t tid;
+    pthread_create(&tid, NULL, dns_resolve, k);
+    pthread_detach(tid);
+
+    selector_set_interest(key->s, key->fd, OP_NOOP);
+    return REQUEST_RESOLVE;
+
   }
 
   default:
@@ -428,14 +408,10 @@ static unsigned request_connect_success(struct selector_key *key) {
   client_t *s = key->data;
 
   // 1. Armar respuesta OK (Esto está bien)
-  request_reply reply = {.version = 0x05,
-                         .status = 0x00,
-                         .bnd.atyp = ATYP_IPV4,
-                         .bnd.addr = {0},
-                         .bnd.port = 0};
+  request_reply reply = {.version = 0x05, .status = 0x00, .bnd.atyp = ATYP_IPV4, .bnd.addr = {0}, .bnd.port = 0};
 
   if (-1 == request_marshall(&s->write_buffer, &reply))
-    return ERROR;
+  return ERROR;
 
   // 2. Configurar intereses COPY
   // IMPORTANTE: Activamos OP_WRITE en el CLIENTE para que el selector
@@ -473,11 +449,12 @@ static unsigned request_connect_done(struct selector_key *key) {
 
     // Preparar respuesta de error
     request_reply reply = {
-        .version = 0x05,
-        .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? 0x04 : 0x01,
-        .bnd.atyp = ATYP_IPV4,
-        .bnd.addr = {0},
-        .bnd.port = 0};
+      .version = 0x05,
+      .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? 0x04 : 0x01,
+      .bnd.atyp = ATYP_IPV4,
+      .bnd.addr = {0},
+      .bnd.port = 0
+    };
 
     if (-1 == request_marshall(&s->write_buffer, &reply)) {
       return ERROR;
@@ -589,8 +566,7 @@ static unsigned on_request_read(struct selector_key *key) {
 
   // 2. Alimentar al parser de Request
   bool errored = false;
-  request_state st =
-      request_consume(&s->read_buffer, &s->request_parser, &errored);
+  request_state st = request_consume(&s->read_buffer, &s->request_parser, &errored);
 
   if (request_is_done(st, &errored)) {
     // ¡Tenemos el pedido completo! (Ej: CONNECT google.com:80)
@@ -608,6 +584,34 @@ static unsigned on_request_read(struct selector_key *key) {
   }
 
   return REQUEST_READ; // Faltan datos, seguimos esperando
+}
+
+static unsigned init_connection_to_origin(client_t *s, struct selector_key *key) {
+    int fd = socket(s->origin_domain, SOCK_STREAM, 0);
+    if (fd < 0) {
+        perror("socket");
+        return ERROR;
+    }
+
+    // No bloqueante
+    if (selector_fd_set_nio(fd) == -1) {
+        close(fd);
+        return ERROR;
+    }
+
+    s->origin_fd = fd;
+
+    int ret = connect(fd, (struct sockaddr *)&s->origin_addr, s->origin_addr_len);
+    if (ret < 0 && errno != EINPROGRESS) {
+        close(fd);
+        s->origin_fd = -1;
+        return ERROR;
+    }
+
+    // Esperamos a que conecte
+    selector_set_interest(key->s, fd, OP_WRITE);
+
+    return REQUEST_WRITE;
 }
 
 /* static unsigned on_request_read(struct selector_key *key) {
@@ -738,6 +742,49 @@ static unsigned on_request_write(struct selector_key *key) {
 
   return COPY;
 }
+
+static unsigned on_request_resolve(struct selector_key *key) {
+    client_t *s = key->data;
+
+    struct addrinfo *res = s->res_addr;
+    struct addrinfo *p   = res;
+
+    if (p == NULL) {
+        // host unreachable
+        printf("DNS: dominio no resuelto.\n");
+
+        request_reply rep = {
+            .version = SOCKS5_VERSION,
+            .status  = 0x04,  // host unreachable
+            .bnd.atyp = ATYP_IPV4,
+            .bnd.port = 0,
+        };
+        memset(rep.bnd.addr, 0, 4);
+
+        if (-1 == request_marshall(&s->write_buffer, &rep)) {
+            return ERROR;
+        }
+
+        selector_set_interest(key->s, key->fd, OP_WRITE);
+        return REQUEST_WRITE;
+    }
+
+    // Tomamos el primer resultado válido
+    s->current_res = p;
+
+    // Copiar dirección resuelta a s->origin_addr
+    memcpy(&s->origin_addr, p->ai_addr, p->ai_addrlen);
+    s->origin_addr_len = p->ai_addrlen;
+    s->origin_domain   = p->ai_family;
+
+    // Liberar lista completa
+    freeaddrinfo(res);
+    s->res_addr    = NULL;
+
+    // Ahora conectar
+    return init_connection_to_origin(s, key);
+}
+
 
 static void socks5_client_read(struct selector_key *key) {
   client_t *session = key->data;

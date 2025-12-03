@@ -8,6 +8,7 @@
 #include "stm.h"
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <pthread.h>
 
 /** maquina de estados general */
 typedef enum socks_v5state {
@@ -42,6 +43,7 @@ typedef enum socks_v5state {
   REQUEST_WRITE,
   COPY,
   REQUEST_CONNECT,
+  REQUEST_RESOLVE,
 
   // estados terminales
   DONE,

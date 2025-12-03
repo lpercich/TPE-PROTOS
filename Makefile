@@ -31,7 +31,8 @@ SRCS = $(SRC_DIR)/echoMain.c \
        $(PARSERS_DIR)/request_parser.c \
        $(PARSERS_DIR)/auth.c \
        $(SRC_DIR)/server.c \
-       $(SRC_DIR)/socks5/socks5.c
+       $(SRC_DIR)/socks5/socks5.c \
+       $(SRC_DIR)/socks5/dns.c
 
 # Object files
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))

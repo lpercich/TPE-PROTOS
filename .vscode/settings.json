@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "hello.h": "c",
-        "request.h": "c"
+        "request.h": "c",
+        "socks5.h": "c"
     }
 }

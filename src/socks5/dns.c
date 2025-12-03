@@ -1,4 +1,10 @@
-#include <dns.h>
+#include "dns.h"
+#include <socks5.h>
+#include <netdb.h>
+#include <selector.h>
+#include <stdlib.h>
+#include <stdio.h>
+
 
 //CHEQUEAR!!!!!!
 void * dns_resolve(void* s_key){
