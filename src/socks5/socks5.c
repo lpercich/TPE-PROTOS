@@ -272,7 +272,7 @@ static unsigned process_request(struct selector_key *key) {
     struct sockaddr_in * ip4 = dest_addr;
     ip4->sin_family = AF_INET;
     ip4->sin_port = htons(p->port); //chequear
-    ip4->sin_addr = p->addr;
+    ip4->sin_addr.s_addr = p->addr;
     break;
 
   case ATYP_DOMAIN:
