@@ -1,4 +1,7 @@
-#include "include/metrics.h"
+#include "metrics.h"
+#include <stdio.h>
+#include <stdlib.h>
+
 
 static uint64_t historic_connections;
 static uint64_t current_connections; 
@@ -38,3 +41,23 @@ void transfer_bytes(uint64_t bytes) {
     transferred_bytes += bytes;
 }
 
+uint8_t * write_metrics(void) {
+    uint8_t * out = malloc(BUFSIZ);  
+    if (!out) return NULL;
+
+    uint64_t total = get_historic_connections();
+    uint64_t current = get_current_connections();
+    uint64_t bytes = get_transferred_bytes();
+   
+    snprintf(out, BUFSIZ,
+        "+OK metrics\r\n"
+        "total_connections: %lu\r\n"
+        "current_connections: %lu\r\n"
+        "transferred_bytes: %lu\r\n",
+        total,
+        current,
+        bytes
+    );
+
+    return out;
+}

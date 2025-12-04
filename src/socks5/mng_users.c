@@ -1,16 +1,21 @@
 #include "mng_users.h"
+#include "../args.h"
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+#include <stdlib.h>
+
 static user_t users[MAX_USERS];
 static int user_count = 0;
 
 bool init_users(void) {
     user_count = 0;
     const char *admin = getenv("ADMIN");
+    char *username, password;
     if (admin) {
-        parse_user(admin, &user, &pass);
+        parse_user(admin, &username, &password);
             if (username && password) {
-                add_user(username, password);
-                free(username);
-                free(password);
+                add_user(username, &password);
             }
         }
     
@@ -60,8 +65,8 @@ bool add_user(const char *username, const char *password) {
 
     for (int i = 0; i < user_count; i++) {
         if (!users[i].is_active) {
-            users[i].username = my_strdup(username);
-            users[i].password = my_strdup(password);
+            users[i].username = strdup(username);
+            users[i].password = strdup(password);
             users[i].is_active = true;
             return true;
         }
@@ -69,15 +74,15 @@ bool add_user(const char *username, const char *password) {
 
     if (user_count >= MAX_USERS) return false;
 
-    users[user_count].username = my_strdup(username);
-    users[user_count].password = my_strdup(password);
+    users[user_count].username = strdup(username);
+    users[user_count].password = strdup(password);
     users[user_count].is_active = true;
     user_count++;
     return true;
 }
 
 bool del_user(char * username){
-    if (!username || !password) return false;
+    if (!username) return false;
 
     for (int i = 0; i < user_count; i++) {
         if (users[i].is_active && strcmp(users[i].username, username) == 0) {
@@ -110,9 +115,9 @@ char * list_users(){
     return buf;
 }
 
-mng_cmd parse_cmd(const char *line, char *arg) {
+mng_cmd parse_command(const char *line, char *arg) {
     arg[0] = '\0';
-    if (!line) return CMD_UNKNOWN;
+    if (!line) return UNKNOWN;
 
     char copy[256];
     strncpy(copy, line, sizeof(copy)-1);
@@ -120,11 +125,11 @@ mng_cmd parse_cmd(const char *line, char *arg) {
 
     char *saveptr;
     char *cmd = strtok_r(copy, " \r\n", &saveptr);
-    if (!cmd) return CMD_UNKNOWN;
+    if (!cmd) return UNKNOWN;
 
     if (strcasecmp(cmd, "AUTH") == 0) {
         char *cred = strtok_r(NULL, " \r\n", &saveptr);
-        if (!cred) return CMD_UNKNOWN;
+        if (!cred) return UNKNOWN;
         strncpy(arg, cred, 127);
         return AUTH;
     }

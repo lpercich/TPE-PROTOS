@@ -1,6 +1,6 @@
 #ifndef METRICS_H
 #define METRICS_H
-
+#include <stdint.h>
 
 
 typedef enum {
@@ -13,6 +13,7 @@ typedef enum {
    UNKNOWN
 } mng_cmd;
 
+uint8_t *write_metrics(void);
 void init_metrics();
 uint64_t get_historic_connections();
 uint64_t get_current_connections();

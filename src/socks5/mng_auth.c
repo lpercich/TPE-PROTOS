@@ -1,5 +1,8 @@
+#include "mng_auth.h"
+#include "mng_prot.h"
+#include <string.h>
 
-mng_auth_state mng_auth_consume(buffer *b, struct mng_auth_parser *p, bool *errored) {
+mng_auth_state mng_auth_consume(buffer *b, mng_auth_parser *p, bool *errored) {
     mng_auth_state st = p->state;
 
     while(buffer_can_read(b)) {
@@ -42,15 +45,3 @@ mng_auth_state mng_auth_consume(buffer *b, struct mng_auth_parser *p, bool *erro
     return st;
 }
 
-bool validate_credentials(metrics_t *m) {
-  for (int i = 0; i < m->user_count; i++) {
-    if (m->users[i].username == NULL)
-      break; // Fin de la lista
-
-    if (strcmp(m->credentials.username, m->users[i].username) == 0 &&
-        strcmp(m->credentials.password, m->users[i].password) == 0) {
-      return true;
-    }
-  }
-  return false;
-}

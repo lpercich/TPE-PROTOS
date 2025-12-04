@@ -4,6 +4,9 @@
 #include "args.h"
 #include "mng_auth.h"
 #include "mng_users.h"
+#include "metrics.h"
+#include <stdint.h>
+#include <stdlib.h>
 #define BUFFER_SIZE 256
 #define CMD_SIZE 16
 #define ARG_SIZE 128

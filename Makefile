@@ -32,7 +32,11 @@ SRCS = $(SRC_DIR)/main.c \
        $(PARSERS_DIR)/auth.c \
        $(SRC_DIR)/server.c \
        $(SRC_DIR)/socks5/socks5.c \
-       $(SRC_DIR)/socks5/dns.c
+       $(SRC_DIR)/socks5/dns.c \
+       $(SRC_DIR)/socks5/metrics.c \
+       $(SRC_DIR)/socks5/mng_auth.c \
+       $(SRC_DIR)/socks5/mng_prot.c \
+       $(SRC_DIR)/socks5/mng_users.c
 
 # Object files
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
