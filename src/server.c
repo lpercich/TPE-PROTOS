@@ -92,51 +92,8 @@ static void on_client_read(struct selector_key *key) {
   unsigned state = stm_handler_read(&session->stm, key);
 
   if (state == ERROR || state == DONE) {
-    selector_unregister_fd(key->s,
-                           key->fd); // Cerrar si fallo o termino -> no deberia
-                                     // ser unregister? Si, tenias razon
+    selector_unregister_fd(key->s, key->fd);
   }
-
-  /* size_t wbytes;
-
-  // 1. Me guarda en el puntero el lugar donde puedo escribir
-  uint8_t *write_ptr = buffer_write_ptr(&session->read_buffer, &wbytes);
-
-  // 2. Intentamos leer del socket (No bloqueante porque lo llama selector
-  _select() en el main) ssize_t n = recv(key->fd, write_ptr, wbytes, 0);
-
-  if (n <= 0) {
-      // Si n=0 (cierre) o n<0 (error), cerramos la sesión.
-      // Al desregistrar, el selector llamará automáticamente a on_client_close.
-      selector_unregister_fd(key->s, key->fd);
-      return; */
-  /*  }
-
-   // 3. Confirmamos que leímos 'n' bytes (valida que se haya leido
-   correctamente) buffer_write_adv(&session->read_buffer, n);
-
-   // --- LÓGICA DE ECO ---
-   // Copiamos todo lo que entró en 'input_buffer' hacia 'output_buffer'
-   while (buffer_can_read(&session->read_buffer)) {
-       // Cuánto hay para leer del input?
-       size_t rbytes;
-       uint8_t *read_ptr = buffer_read_ptr(&session->read_buffer, &rbytes);
-
-       // Cuánto espacio hay en el output?
-       size_t available_space;
-       uint8_t *out_ptr = buffer_write_ptr(&session->write_buffer,
-   &available_space);
-
-       // Copiamos el mínimo entre lo que tengo y lo que entra
-       size_t copy_size = (rbytes < available_space) ? rbytes : available_space;
-       memcpy(out_ptr, read_ptr, copy_size);
-
-       buffer_read_adv(&session->read_buffer, copy_size);
-       buffer_write_adv(&session->write_buffer, copy_size);
-   }
-
-   // 4. Como ahora tenemos datos para enviar, nos interesa el evento WRITE
-   selector_set_interest(key->s, key->fd, OP_WRITE); */
 }
 
 // Handler de ESCRITURA: El socket está listo para enviar datos.
@@ -147,26 +104,6 @@ static void on_client_write(struct selector_key *key) {
   if (state == ERROR || state == DONE) {
     selector_unregister_fd(key->s, key->fd);
   }
-  /*  size_t rbytes;
-
-   // 1. ¿Qué tengo para mandar?
-   uint8_t *read_ptr = buffer_read_ptr(&session->write_buffer, &rbytes);
-
-   // 2. Intentamos enviar
-   ssize_t n = send(key->fd, read_ptr, rbytes, MSG_NOSIGNAL);
-
-   if (n == -1) {
-       selector_unregister_fd(key->s, key->fd);
-       return;
-   }
-
-   // 3. Confirmamos que enviamos 'n' bytes (avanzamos el puntero de lectura)
-   buffer_read_adv(&session->write_buffer, n);
-
-   // 4. Si ya no queda nada en el buffer de salida, volvemos a solo leer
-   if (!buffer_can_read(&session->write_buffer)) {
-       selector_set_interest(key->s, key->fd, OP_READ);
-   } */
 }
 
 // Handler de CIERRE: El socket se cerró.
@@ -224,8 +161,3 @@ void socksv5_passive_accept(struct selector_key *key) {
 
   printf("Nueva conexión aceptada en fd %d\n", new_fd);
 }
-
-// AGREGO FUNCIONES PARA IR VIENDO ACCIONES CON STM
-
-// CHEQUEAR EN TODAS las funcs SOCKS: deberia actualizar el estado con el ret de
-// la funcion se stm???? lectura para socks5
