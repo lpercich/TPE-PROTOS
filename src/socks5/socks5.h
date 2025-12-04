@@ -44,6 +44,7 @@ typedef enum socks_v5state {
   COPY,
   REQUEST_CONNECT,
   REQUEST_RESOLVE,
+  REQUEST_BIND,
 
   // estados terminales
   DONE,

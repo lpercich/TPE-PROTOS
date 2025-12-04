@@ -27,11 +27,15 @@ static unsigned copy_read(struct selector_key *key);
 static unsigned request_connect_init(const unsigned state, struct selector_key *key);
 static unsigned request_connect_done(struct selector_key *key);
 static unsigned on_request_resolve(struct selector_key *key);
+static unsigned on_request_bind(struct selector_key *key);
+
 
 static void socks5_client_read(struct selector_key *key);
 static void socks5_client_write(struct selector_key *key);
 static void socks5_client_close(struct selector_key *key);
 static void socks5_client_block(struct selector_key *key);
+static int get_bound_addr(int fd, reply_addr_t * addr);
+int build_reply(const request_reply *r, uint8_t **out_buf, size_t *out_len);
 
 extern const struct fd_handler *get_session_handler();
 
@@ -54,6 +58,7 @@ static const struct state_definition socks5_states[] = {
   [COPY] = { .state = COPY, .on_read_ready = copy_read, .on_write_ready = copy_write },
   [REQUEST_CONNECT] = { .state = REQUEST_CONNECT, .on_arrival = NULL, .on_write_ready = request_connect_done },
   [REQUEST_RESOLVE] = { .state = REQUEST_RESOLVE, .on_block_ready = on_request_resolve },
+  [REQUEST_BIND] = {.state = REQUEST_BIND, .on_write_ready = on_request_bind },
   [DONE] = { .state = DONE },
   [ERROR] = { .state = ERROR },
 };
@@ -344,7 +349,7 @@ static unsigned process_request(struct selector_key *key) {
 
     // Preparar respuesta de error
     request_reply reply = {
-        .version = 0x05,
+        .version = SOCKS5_VERSION,
         .status = (saved_errno == ENETUNREACH || saved_errno == EHOSTUNREACH)
                       ? 0x04
                       : 0x01, // 0x04 = Host unreachable, 0x01 = General failure
@@ -408,7 +413,7 @@ static unsigned request_connect_success(struct selector_key *key) {
   client_t *s = key->data;
 
   // 1. Armar respuesta OK (Esto está bien)
-  request_reply reply = {.version = 0x05, .status = 0x00, .bnd.atyp = ATYP_IPV4, .bnd.addr = {0}, .bnd.port = 0};
+  request_reply reply = {.version = SOCKS5_VERSION, .status = 0x00, .bnd.atyp = ATYP_IPV4, .bnd.addr = {0}, .bnd.port = 0};
 
   if (-1 == request_marshall(&s->write_buffer, &reply))
   return ERROR;
@@ -449,7 +454,7 @@ static unsigned request_connect_done(struct selector_key *key) {
 
     // Preparar respuesta de error
     request_reply reply = {
-      .version = 0x05,
+      .version = SOCKS5_VERSION,
       .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? 0x04 : 0x01,
       .bnd.atyp = ATYP_IPV4,
       .bnd.addr = {0},
@@ -848,3 +853,108 @@ static void socks5_client_close(struct selector_key *key) {
 }
 
 const struct fd_handler *get_session_handler(void) { return &session_handlers; }
+
+static unsigned on_request_bind(struct selector_key *key){
+  client_t *s = key->data;
+
+  request_reply rep = {
+            .version = SOCKS5_VERSION,
+            .status = 0x00,
+            .rsv = 0x00,
+  };
+      
+  if(!get_bound_addr(s->origin_fd, &rep.bnd)){
+    return ERROR;
+  }
+
+  char * out;
+  unsigned int len;
+
+  if(!build_reply(&rep,&out, &len)){
+    return ERROR;
+  }
+  for(int i=0; i<len; i++){
+    buffer_write(&s->buf_origin_to_client, out[i]);
+  }
+
+  free(out);
+  selector_set_interest_key(key, OP_WRITE);//no c si esta bn esto ¿?
+  return COPY; //TODO: cual es el siguiente estado (no se si es COPY)??????
+  
+
+
+}
+
+static int get_bound_addr(int fd, reply_addr_t * addr){
+  struct sockaddr_storage s;
+  socklen_t len= sizeof(s);
+  if(getsockname(fd, (struct sockaddr *)&s, &len) < 0){
+    return 0;
+  }
+  if(s.ss_family == AF_INET){
+    struct sockaddr_in *ip4 = &s;
+    addr->atyp = ATYP_IPV4;
+    memcpy(addr->addr, &ip4->sin_addr, 4);
+    addr->addr_len=4;
+    addr->port = ntohs(ip4->sin_port);
+  } else if(s.ss_family == AF_INET6){
+    struct sockaddr_in6 *ip6 = &s;
+    addr->atyp = ATYP_IPV6;
+    memcpy(addr->addr, &ip6->sin6_addr, 16);
+    addr->addr_len=16;
+    addr->port = ntohs(ip6->sin6_port);
+  } else {
+    //Tipo de address no soportado
+    return 0;
+  }
+  return 1;
+}
+
+int build_reply(const request_reply *r, uint8_t **out_buf, size_t *out_len) {
+    size_t addr_len;
+    switch (r->bnd.atyp) {
+        case ATYP_IPV4:    addr_len = 4;   break;
+        case ATYP_DOMAIN:  addr_len = 1 + r->bnd.addr_len; break;
+        case ATYP_IPV6:    addr_len = 16;  break;
+        default:
+            return 0;
+    }
+
+    size_t tot = 4 + addr_len + 2;
+    uint8_t *buf = malloc(tot);
+    if (!buf) {
+        return 0;
+    }
+
+    size_t pos = 0;
+    buf[pos++] = r->version;
+    buf[pos++] = r->status;
+    buf[pos++] = 0x00;             
+    buf[pos++] = r->bnd.atyp;
+
+    switch (r->bnd.atyp) {
+        case ATYP_IPV4:
+            memcpy(buf + pos, r->bnd.addr, 4);
+            pos += 4;
+            break;
+        case ATYP_DOMAIN:
+            buf[pos++] = r->bnd.addr_len;
+            memcpy(buf + pos,
+                   r->bnd.addr,
+                   r->bnd.addr_len);
+            pos += r->bnd.addr_len;
+            break;
+        case ATYP_IPV6:
+            memcpy(buf + pos, r->bnd.addr, 16);
+            pos += 16;
+            break;
+    }
+
+    {
+        uint16_t port = htons(r->bnd.port);
+        memcpy(buf + pos, &port, 2);
+    }
+    *out_buf = buf;
+    *out_len = tot;
+    return 1;
+}

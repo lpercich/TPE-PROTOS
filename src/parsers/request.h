@@ -39,6 +39,7 @@ typedef struct {
 typedef struct {
     uint8_t version;         // siempre 0x05
     uint8_t status;          // REP
+    uint8_t  rsv; 
     reply_addr_t bnd;        // dirección reportada por el servidor (bnd.addr del RFC)
 } request_reply;
 
