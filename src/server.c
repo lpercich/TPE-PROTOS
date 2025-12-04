@@ -19,6 +19,7 @@
 static void on_client_read(struct selector_key *key);
 static void on_client_write(struct selector_key *key);
 static void on_client_close(struct selector_key *key);
+static void on_client_block(struct selector_key *key);
 
 static unsigned on_hello_read(struct selector_key *key);
 static unsigned on_hello_write(struct selector_key *key);
@@ -29,6 +30,7 @@ const struct fd_handler session_handlers = {
     .handle_read = on_client_read,
     .handle_write = on_client_write,
     .handle_close = on_client_close,
+    .handle_block = on_client_block,
 };
 
 void session_destroy(client_t *session) {
@@ -111,6 +113,16 @@ static void on_client_close(struct selector_key *key) {
   client_t *session = key->data;
   printf("Cerrando conexión en fd %d\n", key->fd);
   session_destroy(session);
+}
+
+// Handler de BLOQUEO: Tarea bloqueante finalizó (ej: DNS)
+static void on_client_block(struct selector_key *key) {
+  client_t *session = key->data;
+  unsigned state = stm_handler_block(&session->stm, key);
+
+  if (state == ERROR || state == DONE) {
+    selector_unregister_fd(key->s, key->fd);
+  }
 }
 
 // Handler PÚBLICO: Acepta nuevas conexiones SOCKS5.

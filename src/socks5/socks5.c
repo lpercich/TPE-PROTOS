@@ -1,19 +1,18 @@
 #include "args.h"
+#include "dns.h"
 #include "parsers/request.h"
 #include "selector.h"
 #include "stm.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <hello.h>
+#include <netdb.h>
 #include <server.h>
 #include <socks5.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <netdb.h>
-#include "dns.h"
-
 
 static unsigned on_hello_write(struct selector_key *key);
 static unsigned on_hello_read(struct selector_key *key);
@@ -24,17 +23,17 @@ static unsigned on_request_read(struct selector_key *key);
 static unsigned on_request_write(struct selector_key *key);
 static unsigned copy_write(struct selector_key *key);
 static unsigned copy_read(struct selector_key *key);
-static unsigned request_connect_init(const unsigned state, struct selector_key *key);
+static unsigned request_connect_init(const unsigned state,
+                                     struct selector_key *key);
 static unsigned request_connect_done(struct selector_key *key);
 static unsigned on_request_resolve(struct selector_key *key);
 static unsigned on_request_bind(struct selector_key *key);
-
 
 static void socks5_client_read(struct selector_key *key);
 static void socks5_client_write(struct selector_key *key);
 static void socks5_client_close(struct selector_key *key);
 static void socks5_client_block(struct selector_key *key);
-static int get_bound_addr(int fd, reply_addr_t * addr);
+static int get_bound_addr(int fd, reply_addr_t *addr);
 int build_reply(const request_reply *r, uint8_t **out_buf, size_t *out_len);
 
 extern const struct fd_handler *get_session_handler();
@@ -49,18 +48,26 @@ static const struct fd_handler socks5_handler = {
 };
 
 static const struct state_definition socks5_states[] = {
-  [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read },
-  [HELLO_WRITE] = { .state = HELLO_WRITE, .on_write_ready = on_hello_write },
-  [AUTH_READ] = { .state = AUTH_READ, .on_read_ready = on_auth_read },
-  [AUTH_WRITE] = { .state = AUTH_WRITE, .on_write_ready = on_auth_write },
-  [REQUEST_READ] = { .state = REQUEST_READ, .on_arrival = on_request, .on_read_ready = on_request_read },
-  [REQUEST_WRITE] = { .state = REQUEST_WRITE, .on_write_ready = on_request_write },
-  [COPY] = { .state = COPY, .on_read_ready = copy_read, .on_write_ready = copy_write },
-  [REQUEST_CONNECT] = { .state = REQUEST_CONNECT, .on_arrival = NULL, .on_write_ready = request_connect_done },
-  [REQUEST_RESOLVE] = { .state = REQUEST_RESOLVE, .on_block_ready = on_request_resolve },
-  [REQUEST_BIND] = {.state = REQUEST_BIND, .on_write_ready = on_request_bind },
-  [DONE] = { .state = DONE },
-  [ERROR] = { .state = ERROR },
+    [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read},
+    [HELLO_WRITE] = {.state = HELLO_WRITE, .on_write_ready = on_hello_write},
+    [AUTH_READ] = {.state = AUTH_READ, .on_read_ready = on_auth_read},
+    [AUTH_WRITE] = {.state = AUTH_WRITE, .on_write_ready = on_auth_write},
+    [REQUEST_READ] = {.state = REQUEST_READ,
+                      .on_arrival = on_request,
+                      .on_read_ready = on_request_read},
+    [REQUEST_WRITE] = {.state = REQUEST_WRITE,
+                       .on_write_ready = on_request_write},
+    [COPY] = {.state = COPY,
+              .on_read_ready = copy_read,
+              .on_write_ready = copy_write},
+    [REQUEST_CONNECT] = {.state = REQUEST_CONNECT,
+                         .on_arrival = NULL,
+                         .on_write_ready = request_connect_done},
+    [REQUEST_RESOLVE] = {.state = REQUEST_RESOLVE,
+                         .on_block_ready = on_request_resolve},
+    [REQUEST_BIND] = {.state = REQUEST_BIND, .on_write_ready = on_request_bind},
+    [DONE] = {.state = DONE},
+    [ERROR] = {.state = ERROR},
 };
 
 void socks5_init(client_t *s) {
@@ -296,14 +303,13 @@ static unsigned process_request(struct selector_key *key) {
   case ATYP_DOMAIN: {
     struct selector_key *k = malloc(sizeof(*k));
     *k = *key;
-    
+
     pthread_t tid;
     pthread_create(&tid, NULL, dns_resolve, k);
     pthread_detach(tid);
 
     selector_set_interest(key->s, key->fd, OP_NOOP);
     return REQUEST_RESOLVE;
-
   }
 
   default:
@@ -375,10 +381,14 @@ static unsigned request_connect_success(struct selector_key *key) {
   client_t *s = key->data;
 
   // 1. Armar respuesta OK (Esto está bien)
-  request_reply reply = {.version = SOCKS5_VERSION, .status = 0x00, .bnd.atyp = ATYP_IPV4, .bnd.addr = {0}, .bnd.port = 0};
+  request_reply reply = {.version = SOCKS5_VERSION,
+                         .status = 0x00,
+                         .bnd.atyp = ATYP_IPV4,
+                         .bnd.addr = {0},
+                         .bnd.port = 0};
 
   if (-1 == request_marshall(&s->write_buffer, &reply))
-  return ERROR;
+    return ERROR;
 
   // 2. Configurar intereses COPY
   // IMPORTANTE: Activamos OP_WRITE en el CLIENTE para que el selector
@@ -416,12 +426,11 @@ static unsigned request_connect_done(struct selector_key *key) {
 
     // Preparar respuesta de error
     request_reply reply = {
-      .version = SOCKS5_VERSION,
-      .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? 0x04 : 0x01,
-      .bnd.atyp = ATYP_IPV4,
-      .bnd.addr = {0},
-      .bnd.port = 0
-    };
+        .version = SOCKS5_VERSION,
+        .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? 0x04 : 0x01,
+        .bnd.atyp = ATYP_IPV4,
+        .bnd.addr = {0},
+        .bnd.port = 0};
 
     if (-1 == request_marshall(&s->write_buffer, &reply)) {
       return ERROR;
@@ -532,7 +541,8 @@ static unsigned on_request_read(struct selector_key *key) {
 
   // 2. Alimentar al parser de Request
   bool errored = false;
-  request_state st = request_consume(&s->read_buffer, &s->request_parser, &errored);
+  request_state st =
+      request_consume(&s->read_buffer, &s->request_parser, &errored);
 
   if (request_is_done(st, &errored)) {
     // ¡Tenemos el pedido completo! (Ej: CONNECT google.com:80)
@@ -552,34 +562,41 @@ static unsigned on_request_read(struct selector_key *key) {
   return REQUEST_READ; // Faltan datos, seguimos esperando
 }
 
-static unsigned init_connection_to_origin(client_t *s, struct selector_key *key) {
-    int fd = socket(s->origin_domain, SOCK_STREAM, 0);
-    if (fd < 0) {
-        perror("socket");
-        return ERROR;
-    }
+static unsigned init_connection_to_origin(client_t *s,
+                                          struct selector_key *key) {
+  int fd = socket(s->origin_domain, SOCK_STREAM, 0);
+  if (fd < 0) {
+    perror("socket");
+    return ERROR;
+  }
 
-    // No bloqueante
-    if (selector_fd_set_nio(fd) == -1) {
-        close(fd);
-        return ERROR;
-    }
+  // No bloqueante
+  if (selector_fd_set_nio(fd) == -1) {
+    close(fd);
+    return ERROR;
+  }
 
-    s->origin_fd = fd;
+  s->origin_fd = fd;
 
-    int ret = connect(fd, (struct sockaddr *)&s->origin_addr, s->origin_addr_len);
-    if (ret < 0 && errno != EINPROGRESS) {
-        close(fd);
-        s->origin_fd = -1;
-        return ERROR;
-    }
+  int ret = connect(fd, (struct sockaddr *)&s->origin_addr, s->origin_addr_len);
+  if (ret < 0 && errno != EINPROGRESS) {
+    close(fd);
+    s->origin_fd = -1;
+    return ERROR;
+  }
 
-    // Esperamos a que conecte
-    selector_set_interest(key->s, fd, OP_WRITE);
+  // Esperamos a que conecte
+  selector_status ss =
+      selector_register(key->s, fd, get_session_handler(), OP_WRITE, s);
+  if (ss != SELECTOR_SUCCESS) {
+    close(fd);
+    s->origin_fd = -1;
+    return ERROR;
+  }
+  s->references++;
 
-    return REQUEST_WRITE;
+  return REQUEST_CONNECT;
 }
-
 
 static unsigned on_request_write(struct selector_key *key) {
   client_t *s = key->data;
@@ -631,47 +648,46 @@ static unsigned on_request_write(struct selector_key *key) {
 }
 
 static unsigned on_request_resolve(struct selector_key *key) {
-    client_t *s = key->data;
+  client_t *s = key->data;
 
-    struct addrinfo *res = s->res_addr;
-    struct addrinfo *p   = res;
+  struct addrinfo *res = s->res_addr;
+  struct addrinfo *p = res;
 
-    if (p == NULL) {
-        // host unreachable
-        printf("DNS: dominio no resuelto.\n");
+  if (p == NULL) {
+    // host unreachable
+    printf("DNS: dominio no resuelto.\n");
 
-        request_reply rep = {
-            .version = SOCKS5_VERSION,
-            .status  = 0x04,  // host unreachable
-            .bnd.atyp = ATYP_IPV4,
-            .bnd.port = 0,
-        };
-        memset(rep.bnd.addr, 0, 4);
+    request_reply rep = {
+        .version = SOCKS5_VERSION,
+        .status = 0x04, // host unreachable
+        .bnd.atyp = ATYP_IPV4,
+        .bnd.port = 0,
+    };
+    memset(rep.bnd.addr, 0, 4);
 
-        if (-1 == request_marshall(&s->write_buffer, &rep)) {
-            return ERROR;
-        }
-
-        selector_set_interest(key->s, key->fd, OP_WRITE);
-        return REQUEST_WRITE;
+    if (-1 == request_marshall(&s->write_buffer, &rep)) {
+      return ERROR;
     }
 
-    // Tomamos el primer resultado válido
-    s->current_res = p;
+    selector_set_interest(key->s, key->fd, OP_WRITE);
+    return REQUEST_WRITE;
+  }
 
-    // Copiar dirección resuelta a s->origin_addr
-    memcpy(&s->origin_addr, p->ai_addr, p->ai_addrlen);
-    s->origin_addr_len = p->ai_addrlen;
-    s->origin_domain   = p->ai_family;
+  // Tomamos el primer resultado válido
+  s->current_res = p;
 
-    // Liberar lista completa
-    freeaddrinfo(res);
-    s->res_addr    = NULL;
+  // Copiar dirección resuelta a s->origin_addr
+  memcpy(&s->origin_addr, p->ai_addr, p->ai_addrlen);
+  s->origin_addr_len = p->ai_addrlen;
+  s->origin_domain = p->ai_family;
 
-    // Ahora conectar
-    return init_connection_to_origin(s, key);
+  // Liberar lista completa
+  freeaddrinfo(res);
+  s->res_addr = NULL;
+
+  // Ahora conectar
+  return init_connection_to_origin(s, key);
 }
-
 
 static void socks5_client_read(struct selector_key *key) {
   client_t *session = key->data;
@@ -729,103 +745,105 @@ static void socks5_client_close(struct selector_key *key) {
 
 const struct fd_handler *get_session_handler(void) { return &session_handlers; }
 
-static unsigned on_request_bind(struct selector_key *key){
+static unsigned on_request_bind(struct selector_key *key) {
   client_t *s = key->data;
 
   request_reply rep = {
-            .version = SOCKS5_VERSION,
-            .status = 0x00,
-            .rsv = 0x00,
+      .version = SOCKS5_VERSION,
+      .status = 0x00,
+      .rsv = 0x00,
   };
-      
-  if(!get_bound_addr(s->origin_fd, &rep.bnd)){
+
+  if (!get_bound_addr(s->origin_fd, &rep.bnd)) {
     return ERROR;
   }
 
-  char * out;
+  char *out;
   unsigned int len;
 
-  if(-1 == request_marshall(&rep,&out)){
+  if (-1 == request_marshall(&rep, &out)) {
     return ERROR;
   }
-  //chequear si hay q hacer free
-  //free(out);
+  // chequear si hay q hacer free
+  // free(out);
   selector_set_interest_key(key, OP_WRITE);
-  return COPY; //TODO: cual es el siguiente estado (no se si es COPY)??????
-  
-
+  return COPY; // TODO: cual es el siguiente estado (no se si es COPY)??????
 }
 
-static int get_bound_addr(int fd, reply_addr_t * addr){
+static int get_bound_addr(int fd, reply_addr_t *addr) {
   struct sockaddr_storage s;
-  socklen_t len= sizeof(s);
-  if(getsockname(fd, (struct sockaddr *)&s, &len) < 0){
+  socklen_t len = sizeof(s);
+  if (getsockname(fd, (struct sockaddr *)&s, &len) < 0) {
     return 0;
   }
-  if(s.ss_family == AF_INET){
+  if (s.ss_family == AF_INET) {
     struct sockaddr_in *ip4 = &s;
     addr->atyp = ATYP_IPV4;
     memcpy(addr->addr, &ip4->sin_addr, 4);
-    addr->addr_len=4;
+    addr->addr_len = 4;
     addr->port = ntohs(ip4->sin_port);
-  } else if(s.ss_family == AF_INET6){
+  } else if (s.ss_family == AF_INET6) {
     struct sockaddr_in6 *ip6 = &s;
     addr->atyp = ATYP_IPV6;
     memcpy(addr->addr, &ip6->sin6_addr, 16);
-    addr->addr_len=16;
+    addr->addr_len = 16;
     addr->port = ntohs(ip6->sin6_port);
   } else {
-    //Tipo de address no soportado
+    // Tipo de address no soportado
     return 0;
   }
   return 1;
 }
 
 int build_reply(const request_reply *r, uint8_t **out_buf, size_t *out_len) {
-    size_t addr_len;
-    switch (r->bnd.atyp) {
-        case ATYP_IPV4:    addr_len = 4;   break;
-        case ATYP_DOMAIN:  addr_len = 1 + r->bnd.addr_len; break;
-        case ATYP_IPV6:    addr_len = 16;  break;
-        default:
-            return 0;
-    }
+  size_t addr_len;
+  switch (r->bnd.atyp) {
+  case ATYP_IPV4:
+    addr_len = 4;
+    break;
+  case ATYP_DOMAIN:
+    addr_len = 1 + r->bnd.addr_len;
+    break;
+  case ATYP_IPV6:
+    addr_len = 16;
+    break;
+  default:
+    return 0;
+  }
 
-    size_t tot = 4 + addr_len + 2;
-    uint8_t *buf = malloc(tot);
-    if (!buf) {
-        return 0;
-    }
+  size_t tot = 4 + addr_len + 2;
+  uint8_t *buf = malloc(tot);
+  if (!buf) {
+    return 0;
+  }
 
-    size_t pos = 0;
-    buf[pos++] = r->version;
-    buf[pos++] = r->status;
-    buf[pos++] = 0x00;             
-    buf[pos++] = r->bnd.atyp;
+  size_t pos = 0;
+  buf[pos++] = r->version;
+  buf[pos++] = r->status;
+  buf[pos++] = 0x00;
+  buf[pos++] = r->bnd.atyp;
 
-    switch (r->bnd.atyp) {
-        case ATYP_IPV4:
-            memcpy(buf + pos, r->bnd.addr, 4);
-            pos += 4;
-            break;
-        case ATYP_DOMAIN:
-            buf[pos++] = r->bnd.addr_len;
-            memcpy(buf + pos,
-                   r->bnd.addr,
-                   r->bnd.addr_len);
-            pos += r->bnd.addr_len;
-            break;
-        case ATYP_IPV6:
-            memcpy(buf + pos, r->bnd.addr, 16);
-            pos += 16;
-            break;
-    }
+  switch (r->bnd.atyp) {
+  case ATYP_IPV4:
+    memcpy(buf + pos, r->bnd.addr, 4);
+    pos += 4;
+    break;
+  case ATYP_DOMAIN:
+    buf[pos++] = r->bnd.addr_len;
+    memcpy(buf + pos, r->bnd.addr, r->bnd.addr_len);
+    pos += r->bnd.addr_len;
+    break;
+  case ATYP_IPV6:
+    memcpy(buf + pos, r->bnd.addr, 16);
+    pos += 16;
+    break;
+  }
 
-    {
-        uint16_t port = htons(r->bnd.port);
-        memcpy(buf + pos, &port, 2);
-    }
-    *out_buf = buf;
-    *out_len = tot;
-    return 1;
+  {
+    uint16_t port = htons(r->bnd.port);
+    memcpy(buf + pos, &port, 2);
+  }
+  *out_buf = buf;
+  *out_len = tot;
+  return 1;
 }
