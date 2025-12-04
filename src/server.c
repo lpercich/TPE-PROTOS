@@ -19,6 +19,7 @@
 static void on_client_read(struct selector_key *key);
 static void on_client_write(struct selector_key *key);
 static void on_client_close(struct selector_key *key);
+static void on_client_block(struct selector_key *key);
 
 static unsigned on_hello_read(struct selector_key *key);
 static unsigned on_hello_write(struct selector_key *key);
@@ -29,6 +30,7 @@ const struct fd_handler session_handlers = {
     .handle_read = on_client_read,
     .handle_write = on_client_write,
     .handle_close = on_client_close,
+    .handle_block = on_client_block,
 };
 
 void session_destroy(client_t *session) {
@@ -56,19 +58,6 @@ static client_t *session_new(int fd) {
 
   session->client_fd = fd;
   session->origin_fd = -1;
-
-  // Inicializamos los buffers apuntando a los arrays internos
-  buffer_init(&session->read_buffer, BUFFER_SIZE, session->read_memory);
-  buffer_init(&session->write_buffer, BUFFER_SIZE, session->write_memory);
-
-  socks5_init(session);
-  if (session == NULL) {
-    return NULL;
-  }
-  memset(session, 0, sizeof(client_t));
-
-  session->client_fd = fd;
-  session->origin_fd = -1;
   session->close_after_write = false;
   session->references = 1;
 
@@ -80,7 +69,6 @@ static client_t *session_new(int fd) {
 
   hello_parser_init(&session->hello_parser);
   session->hello_parser.data = session;
-  // inicializar los otros parsers
 
   return session;
 }
@@ -92,7 +80,12 @@ static void on_client_read(struct selector_key *key) {
   unsigned state = stm_handler_read(&session->stm, key);
 
   if (state == ERROR || state == DONE) {
+    int other_fd = (key->fd == session->client_fd) ? session->origin_fd
+                                                   : session->client_fd;
     selector_unregister_fd(key->s, key->fd);
+    if (other_fd >= 0) {
+      selector_unregister_fd(key->s, other_fd);
+    }
   }
 }
 
@@ -102,7 +95,12 @@ static void on_client_write(struct selector_key *key) {
   unsigned state = stm_handler_write(&session->stm, key);
 
   if (state == ERROR || state == DONE) {
+    int other_fd = (key->fd == session->client_fd) ? session->origin_fd
+                                                   : session->client_fd;
     selector_unregister_fd(key->s, key->fd);
+    if (other_fd >= 0) {
+      selector_unregister_fd(key->s, other_fd);
+    }
   }
 }
 
@@ -111,6 +109,21 @@ static void on_client_close(struct selector_key *key) {
   client_t *session = key->data;
   printf("Cerrando conexión en fd %d\n", key->fd);
   session_destroy(session);
+}
+
+// Handler de BLOQUEO: Tarea bloqueante finalizó (ej: DNS)
+static void on_client_block(struct selector_key *key) {
+  client_t *session = key->data;
+  unsigned state = stm_handler_block(&session->stm, key);
+
+  if (state == ERROR || state == DONE) {
+    int other_fd = (key->fd == session->client_fd) ? session->origin_fd
+                                                   : session->client_fd;
+    selector_unregister_fd(key->s, key->fd);
+    if (other_fd >= 0) {
+      selector_unregister_fd(key->s, other_fd);
+    }
+  }
 }
 
 // Handler PÚBLICO: Acepta nuevas conexiones SOCKS5.

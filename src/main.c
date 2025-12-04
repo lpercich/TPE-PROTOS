@@ -1,166 +1,174 @@
-/**
- * main.c - servidor proxy socks concurrente
- *
- * Interpreta los argumentos de línea de comandos, y monta un socket
- * pasivo.
- *
- * Todas las conexiones entrantes se manejarán en éste hilo.
- *
- * Se descargará en otro hilos las operaciones bloqueantes (resolución de
- * DNS utilizando getaddrinfo), pero toda esa complejidad está oculta en
- * el selector.
- */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <limits.h>
+#include "lib/selector.h"
 #include <errno.h>
-#include <signal.h>
-
-#include <unistd.h>
-#include <sys/types.h>   // socket
-#include <sys/socket.h>  // socket
+#include <limits.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "socks5.h"
-#include "selector.h"
-#include "socks5nio.h"
+#include "args.h"
+#include "server.h"
 
-static bool done = false;
+static bool terminate = false;
 
-static void
-sigterm_handler(const int signal) {
-    printf("signal %d, cleaning up and exiting\n",signal);
-    done = true;
+// Handler para bajar el servidor con CTRL+C
+static void sig_handler(const int signal) {
+  printf("Señal %d recibida, terminando servidor...\n", signal);
+  terminate = true;
 }
 
-int
-main(const int argc, const char **argv) {
-    unsigned port = 1080;
+// Crea y configura un socket pasivo TCP utilizando getaddrinfo. Soporta IPv4 e
+// IPv6.
+static int create_tcp_server_socket(const char *addr, const char *port) {
+  struct addrinfo hints;
+  struct addrinfo *result, *rp;
+  int sfd = -1;
 
-    if(argc == 1) {
-        // utilizamos el default
-    } else if(argc == 2) {
-        char *end     = 0;
-        const long sl = strtol(argv[1], &end, 10);
+  memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_family = AF_UNSPEC;     // Permite IPv4 o IPv6
+  hints.ai_socktype = SOCK_STREAM; // TCP
+  hints.ai_flags = AI_PASSIVE;     // Para usar en bind()
 
-        if (end == argv[1]|| '\0' != *end 
-           || ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno)
-           || sl < 0 || sl > USHRT_MAX) {
-            fprintf(stderr, "port should be an integer: %s\n", argv[1]);
-            return 1;
-        }
-        port = sl;
-    } else {
-        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
-        return 1;
+  int s = getaddrinfo(addr, port, &hints, &result);
+  if (s != 0) {
+    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+    return -1;
+  }
+
+  // Iterar sobre las direcciones encontradas hasta lograr bind
+  for (rp = result; rp != NULL; rp = rp->ai_next) {
+    sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+    if (sfd == -1)
+      continue;
+
+    // 1. Configurar SO_REUSEADDR (esto es para que el socket pueda ser
+    // reutilizado rápidamente, sino te quedas esperando a que lo liberen)
+    int opt = 1;
+    if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+      perror("setsockopt(SO_REUSEADDR)");
+      close(sfd);
+      continue;
     }
 
-    // no tenemos nada que leer de stdin
-    close(0);
-
-    const char       *err_msg = NULL;
-    selector_status   ss      = SELECTOR_SUCCESS;
-    fd_selector selector      = NULL;
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port        = htons(port);
-
-    const int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if(server < 0) {
-        err_msg = "unable to create socket";
-        goto finally;
+    // 2. Si es IPv6, intentamos habilitar Dual Stack (para aceptar v4 también
+    // si es ::)
+    if (rp->ai_family == AF_INET6) {
+      int no = 0;
+      // Ignoramos error si falla, no es crítico para que levante
+      setsockopt(sfd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
     }
 
-    fprintf(stdout, "Listening on TCP port %d\n", port);
+    if (bind(sfd, rp->ai_addr, rp->ai_addrlen) == 0)
+      break; // Éxito
 
-    // man 7 ip. no importa reportar nada si falla.
-    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
+    close(sfd); // Fallo bind, cerramos e intentamos siguiente
+  }
 
-    if(bind(server, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
-        err_msg = "unable to bind socket";
-        goto finally;
-    }
+  if (rp == NULL) {
+    fprintf(stderr, "No se pudo conectar a ninguna dirección\n");
+    freeaddrinfo(result);
+    return -1;
+  }
 
-    if (listen(server, 20) < 0) {
-        err_msg = "unable to listen";
-        goto finally;
-    }
+  freeaddrinfo(result);
 
-    // registrar sigterm es útil para terminar el programa normalmente.
-    // esto ayuda mucho en herramientas como valgrind.
-    signal(SIGTERM, sigterm_handler);
-    signal(SIGINT,  sigterm_handler);
+  if (listen(sfd, 20) <
+      0) { // CAMBIAR EL MAGIC VALUE (20), posiblemente por SOMAXCONN
+    perror("listen");
+    close(sfd);
+    return -1;
+  }
 
-    if(selector_fd_set_nio(server) == -1) {
-        err_msg = "getting server socket flags";
-        goto finally;
-    }
-    const struct selector_init conf = {
-        .signal = SIGALRM,
-        .select_timeout = {
-            .tv_sec  = 10,
-            .tv_nsec = 0,
-        },
-    };
-    if(0 != selector_init(&conf)) {
-        err_msg = "initializing selector";
-        goto finally;
-    }
+  return sfd;
+}
 
-    selector = selector_new(1024);
-    if(selector == NULL) {
-        err_msg = "unable to create selector";
-        goto finally;
-    }
-    const struct fd_handler socksv5 = {
-        .handle_read       = socksv5_passive_accept,
-        .handle_write      = NULL,
-        .handle_close      = NULL, // nada que liberar
-    };
-    ss = selector_register(selector, server, &socksv5,
-                                              OP_READ, NULL);
-    if(ss != SELECTOR_SUCCESS) {
-        err_msg = "registering fd";
-        goto finally;
-    }
-    for(;!done;) {
-        err_msg = NULL;
-        ss = selector_select(selector);
-        if(ss != SELECTOR_SUCCESS) {
-            err_msg = "serving";
-            goto finally;
-        }
-    }
-    if(err_msg == NULL) {
-        err_msg = "closing";
-    }
+int main(const int argc, char **argv) {
+  // 1. Parsear argumentos (para obtener el puerto)
+  struct socks5args args;
+  parse_args(argc, argv, &args);
 
-    int ret = 0;
-finally:
-    if(ss != SELECTOR_SUCCESS) {
-        fprintf(stderr, "%s: %s\n", (err_msg == NULL) ? "": err_msg,
-                                  ss == SELECTOR_IO
-                                      ? strerror(errno)
-                                      : selector_error(ss));
-        ret = 2;
-    } else if(err_msg) {
-        perror(err_msg);
-        ret = 1;
-    }
-    if(selector != NULL) {
-        selector_destroy(selector);
-    }
+  setbuf(stdout, NULL);
+
+  // Convertir puerto a string para getaddrinfo
+  char port_str[8];
+  snprintf(port_str, sizeof(port_str), "%d", args.socks_port);
+
+  // 2. Crear el socket del servidor usando create_tcp_server_socket
+  int server_socket = create_tcp_server_socket(args.socks_addr, port_str);
+  if (server_socket < 0) {
+    fprintf(stderr, "Fallo iniciando servidor en %s:%s\n", args.socks_addr,
+            port_str);
+    return 1;
+  }
+
+  // 3. Configurar Socket Pasivo como NO BLOQUEANTE
+  if (selector_fd_set_nio(server_socket) == -1) {
+    perror("Fallo configurando server socket como no-bloqueante");
+    close(server_socket);
+    return 1;
+  }
+
+  // 4. Inicializar Selector. Como es pasivo no necesita write y close
+  // SELECTOR PARA ACEPTAR CONEXIONES
+  const struct fd_handler selector_handler = {
+      .handle_read = echo_service_accept,
+      .handle_write = NULL,
+      .handle_close = NULL,
+  };
+
+  struct selector_init conf = {.signal = SIGALRM,
+                               .select_timeout = {.tv_sec = 10, .tv_nsec = 0}};
+
+  if (selector_init(&conf) != 0) {
+    fprintf(stderr, "Fallo inicializando librería selector\n");
+    close(server_socket);
+    return 1;
+  }
+
+  fd_selector selector = selector_new(1024);
+  if (selector == NULL) {
+    fprintf(stderr, "Fallo creando instancia de selector\n");
     selector_close();
+    close(server_socket);
+    return 1;
+  }
 
-    socksv5_pool_destroy();
+  // Pasamos &args como data para que el handler pueda acceder a los usuarios
+  // configurados
+  selector_status ss = selector_register(selector, server_socket,
+                                         &selector_handler, OP_READ, &args);
+  if (ss != SELECTOR_SUCCESS) {
+    fprintf(stderr, "Fallo registrando servidor: %s\n", selector_error(ss));
+    selector_destroy(selector);
+    selector_close();
+    close(server_socket);
+    return 1;
+  }
 
-    if(server >= 0) {
-        close(server);
+  // 5. Loop principal
+  // Configuro señales para poder terminar el programa con Ctrl+C
+  signal(SIGTERM, sig_handler);
+  signal(SIGINT, sig_handler);
+
+  printf("SOCKS5 Server escuchando en %s:%s...\n", args.socks_addr, port_str);
+
+  while (!terminate) {
+    ss = selector_select(selector);
+    if (ss != SELECTOR_SUCCESS) {
+      fprintf(stderr, "Error en selector_select: %s\n", selector_error(ss));
+      break;
     }
-    return ret;
+  }
+  // Cierra los sockets
+  if (selector != NULL)
+    selector_destroy(selector);
+  selector_close();
+  close(server_socket);
+  return 0;
 }

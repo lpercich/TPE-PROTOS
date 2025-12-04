@@ -19,7 +19,7 @@ SOCKS5_DIR = $(SRC_DIR)/socks5
 INCLUDES = -I$(SRC_DIR) -I$(LIB_DIR) -I$(PARSERS_DIR) -I$(SOCKS5_DIR)
 
 # Source files
-SRCS = $(SRC_DIR)/echoMain.c \
+SRCS = $(SRC_DIR)/main.c \
        $(SRC_DIR)/args.c \
        $(LIB_DIR)/buffer.c \
        $(LIB_DIR)/netutils.c \
