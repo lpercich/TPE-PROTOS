@@ -1,6 +1,6 @@
 # Servidor Proxy SOCKSv5
 
-Servidor proxy concurrente basado en eventos (no bloqueante) que implementa el protocolo SOCKSv5 (RFC 1928). Soporta autenticación de usuario/contraseña, conexión a destinos IPv4/IPv6 y resolución DNS asincrónica (DNS no terminado). Management protocol todavia no implementado.
+Servidor proxy concurrente basado en eventos (no bloqueante) que implementa el protocolo SOCKSv5 (RFC 1928). Soporta autenticación de usuario/contraseña, conexión a destinos IPv4/IPv6 y resolución DNS asincrónica. Management protocol todavia no implementado.
 
 ## Compilación
 
