@@ -870,18 +870,14 @@ static unsigned on_request_bind(struct selector_key *key){
   char * out;
   unsigned int len;
 
-  if(!build_reply(&rep,&out, &len)){
+  if(-1 == request_marshall(&rep,&out)){
     return ERROR;
   }
-  for(int i=0; i<len; i++){
-    buffer_write(&s->buf_origin_to_client, out[i]);
-  }
-
-  free(out);
+  //chequear si hay q hacer free
+  //free(out);
   selector_set_interest_key(key, OP_WRITE);//no c si esta bn esto ¿?
   return COPY; //TODO: cual es el siguiente estado (no se si es COPY)??????
   
-
 
 }
 
