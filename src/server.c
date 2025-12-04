@@ -159,5 +159,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
 
+  //queda en standby primero probar q ande el mng protocol
+  //start_connection();
   printf("Nueva conexión aceptada en fd %d\n", new_fd);
 }
