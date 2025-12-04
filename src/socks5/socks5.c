@@ -69,7 +69,6 @@ void socks5_init(client_t *s) {
   s->stm.states = socks5_states;
   s->stm.current = NULL;
   stm_init(&s->stm);
-  // capaz cambiarlo para que no sea loop infinito (?
 }
 
 static void on_request(const unsigned state, struct selector_key *key) {
@@ -372,43 +371,6 @@ static unsigned process_request(struct selector_key *key) {
                           // simplificar
 }
 
-/* static unsigned request_connect_init(const unsigned state, struct
-selector_key *key) { client_t *s = key->data;
-
-    // 1. Crear socket origen
-    s->origin_fd = socket(s->origin_domain, SOCK_STREAM, 0);
-    if (s->origin_fd == -1) return ERROR;
-
-    // 2. No Bloqueante
-    if (selector_fd_set_nio(s->origin_fd) == -1) {
-        close(s->origin_fd);
-        return ERROR;
-    }
-
-    // 3. Iniciar conexión
-    int ret = connect(s->origin_fd, (struct sockaddr *)&s->origin_addr,
-s->origin_addr_len);
-
-    if (ret == -1) {
-        if (errno == EINPROGRESS) {
-            // Esperamos a que conecte: registramos OP_WRITE en el nuevo socket
-            selector_status ss = selector_register(key->s, s->origin_fd,
-get_socks5_handler(), OP_WRITE, s); if (ss != SELECTOR_SUCCESS) {
-                close(s->origin_fd);
-                return ERROR;
-            }
-            // Pausamos al cliente mientras tanto
-            selector_set_interest_key(key, OP_NOOP);
-            return REQUEST_CONNECT;
-        }
-        // Error real
-        close(s->origin_fd);
-        return ERROR;
-    }
-
-    return ERROR;
-} */
-
 static unsigned request_connect_success(struct selector_key *key) {
   client_t *s = key->data;
 
@@ -497,7 +459,6 @@ static unsigned copy_read(struct selector_key *key) {
       printf("COPY: El ORIGEN cerró la conexión.\n");
     }
 
-    // Mark for cleanup - don't unregister here as it frees the session!
     s->close_after_write = true;
     return DONE;
   }
@@ -619,84 +580,6 @@ static unsigned init_connection_to_origin(client_t *s, struct selector_key *key)
     return REQUEST_WRITE;
 }
 
-/* static unsigned on_request_read(struct selector_key *key) {
-    printf("Adentro de on_request_read\n");
-    client_t *s = key->data;
-    bool errored = false;
-
-    // 1) Leer del socket
-    size_t space;
-    uint8_t *dst = buffer_write_ptr(&s->read_buffer, &space);
-    ssize_t ret = recv(key->fd, dst, space, 0);
-    if (ret <= 0) return ERROR;
-    buffer_write_adv(&s->read_buffer, ret);
-    // 2) Parsear el mensaje
-    request_state rstate = request_consume(&s->read_buffer, &s->request_parser,
-&errored); printf("salimos de request_consume\n"); if (errored) {
-        printf("errored\n");
-        return ERROR;
-    }
-
-    // 3) Terminó la request?
-    if (request_is_done(rstate, &errored)) {
-        printf("entre al if de request is done\n");
-        // Por ahora solo soportamos CONNECT. (TODO los otros commandos)
-        if (s->request_parser.cmd != 0x01) {
-            return ERROR;
-        }
-
-        // 4) Construyo el reply
-        request_reply reply;
-        memset(&reply, 0, sizeof(reply));
-
-        reply.version = SOCKS5_VERSION;
-        reply.status  = 0x00;    // éxito
-        reply.bnd.atyp = ATYP_IPV4;
-        reply.bnd.port = 0;      // 0.0.0.0:0 (sin origen real todavía)
-        memset(reply.bnd.addr, 0, 4);
-
-        if (request_marshall(&s->write_buffer, &reply) < 0) {
-            return ERROR;
-        }
-
-        // 5) Escribimos
-        selector_set_interest(key->s, key->fd, OP_WRITE);
-        return REQUEST_WRITE;
-    }
-
-    //Todavía falta recibir bytes
-    return REQUEST_READ;
-}
- */
-/* static unsigned on_request_write(struct selector_key *key) {
-    client_t *s = key->data;
-
-    //1) Qué hay para mandar?
-    size_t nbytes;
-    uint8_t *ptr = buffer_read_ptr(&s->write_buffer, &nbytes);
-
-    if (nbytes == 0) {
-        return ERROR;   // no debería pasar
-    }
-
-    //  2) Enviar
-    ssize_t n = send(key->fd, ptr, nbytes, MSG_NOSIGNAL);
-    if (n <= 0) {
-        return ERROR;
-    }
-
-    buffer_read_adv(&s->write_buffer, n);
-
-    // 3) Queda por enviar?
-    if (buffer_can_read(&s->write_buffer)) {
-        return REQUEST_WRITE;
-    }
-
-    // 4) pasamos a COPY
-    selector_set_interest(key->s, key->fd, OP_READ);
-    return COPY;
-}
- */
 
 static unsigned on_request_write(struct selector_key *key) {
   client_t *s = key->data;
@@ -743,7 +626,6 @@ static unsigned on_request_write(struct selector_key *key) {
       selector_set_interest(key->s, s->origin_fd, OP_READ);
     }
   }
-  // ------------------
 
   return COPY;
 }
@@ -798,8 +680,6 @@ static void socks5_client_read(struct selector_key *key) {
 
   // Si terminamos o hubo error, cerramos todo
   if (state == DONE || state == ERROR) {
-    // If we're in COPY state and closing, we need to unregister BOTH FDs
-    // to prevent the other FD from accessing the freed session
     int other_fd = -1;
     if (key->fd == session->client_fd) {
       other_fd = session->origin_fd;
@@ -807,10 +687,8 @@ static void socks5_client_read(struct selector_key *key) {
       other_fd = session->client_fd;
     }
 
-    // Unregister the current FD (will call socks5_client_close)
     selector_unregister_fd(key->s, key->fd);
 
-    // If there's another FD, unregister it too
     if (other_fd >= 0) {
       selector_unregister_fd(key->s, other_fd);
     }
@@ -840,15 +718,12 @@ static void socks5_client_close(struct selector_key *key) {
 
   stm_handler_close(&session->stm, key);
 
-  // Mark this FD as already closed so session_destroy doesn't try to close it
-  // again
   if (key->fd == session->client_fd) {
     session->client_fd = -1;
   } else if (key->fd == session->origin_fd) {
     session->origin_fd = -1;
   }
 
-  // Use session_destroy which handles reference counting properly
   session_destroy(session);
 }
 
@@ -875,7 +750,7 @@ static unsigned on_request_bind(struct selector_key *key){
   }
   //chequear si hay q hacer free
   //free(out);
-  selector_set_interest_key(key, OP_WRITE);//no c si esta bn esto ¿?
+  selector_set_interest_key(key, OP_WRITE);
   return COPY; //TODO: cual es el siguiente estado (no se si es COPY)??????
   
 
