@@ -332,9 +332,9 @@ static unsigned process_request(struct selector_key *key) {
   if (ret == -1) {
     if (errno == EINPROGRESS) {
       // Conexión en curso: Registramos el origen en el selector
-      // IMPORTANTE: Usamos el mismo handler que el cliente (ver punto 3 abajo)
-      selector_status ss =
-          selector_register(key->s, s->origin_fd, &socks5_handler, OP_WRITE, s);
+      // IMPORTANTE: Usamos el mismo handler que en init_connection_to_origin
+      selector_status ss = selector_register(
+          key->s, s->origin_fd, get_session_handler(), OP_WRITE, s);
       if (ss != SELECTOR_SUCCESS) {
         close(s->origin_fd);
         return ERROR;
