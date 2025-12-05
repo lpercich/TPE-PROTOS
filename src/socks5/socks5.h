@@ -7,8 +7,8 @@
 #include "request.h"
 #include "stm.h"
 #include <netinet/in.h>
-#include <sys/socket.h>
 #include <pthread.h>
+#include <sys/socket.h>
 
 /** maquina de estados general */
 typedef enum socks_v5state {
@@ -111,6 +111,7 @@ typedef struct client_s {
 } client_t;
 
 void socks5_init(client_t *s);
+void configure_buffer_size(size_t size);
 const struct fd_handler *get_socks5_handler(void);
 
 #endif

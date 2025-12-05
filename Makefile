@@ -37,7 +37,8 @@ SRCS = $(SRC_DIR)/main.c \
        $(MANAGEMENT_DIR)/metrics.c \
        $(MANAGEMENT_DIR)/mng_auth.c \
        $(MANAGEMENT_DIR)/mng_prot.c \
-       $(MANAGEMENT_DIR)/mng_users.c
+       $(MANAGEMENT_DIR)/mng_users.c \
+       $(MANAGEMENT_DIR)/logger.c
 
 # Object files
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))

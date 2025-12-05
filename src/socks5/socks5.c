@@ -1,5 +1,7 @@
 #include "args.h"
 #include "dns.h"
+#include "lib/netutils.h"
+#include "management/logger.h"
 #include "management/metrics.h"
 #include "parsers/request.h"
 #include "selector.h"
@@ -392,6 +394,23 @@ static unsigned process_request(struct selector_key *key) {
                           // simplificar
 }
 
+static void log_connection(client_t *s, const char *status) {
+  char src_addr[64], dst_addr[64];
+  struct sockaddr_storage client_addr;
+  socklen_t len = sizeof(client_addr);
+
+  if (getpeername(s->client_fd, (struct sockaddr *)&client_addr, &len) == 0) {
+    sockaddr_to_human(src_addr, sizeof(src_addr),
+                      (struct sockaddr *)&client_addr);
+  } else {
+    strncpy(src_addr, "unknown", sizeof(src_addr));
+  }
+
+  sockaddr_to_human(dst_addr, sizeof(dst_addr),
+                    (struct sockaddr *)&s->origin_addr);
+  log_access(s->credentials.username, src_addr, dst_addr, status);
+}
+
 static unsigned request_connect_success(struct selector_key *key) {
   client_t *s = key->data;
 
@@ -404,6 +423,9 @@ static unsigned request_connect_success(struct selector_key *key) {
 
   if (-1 == request_marshall(&s->write_buffer, &reply))
     return ERROR;
+
+  // Log successful connection
+  log_connection(s, "CONNECT");
 
   // 2. Configurar intereses COPY
   // IMPORTANTE: Activamos OP_WRITE en el CLIENTE para que el selector
@@ -457,6 +479,14 @@ static unsigned request_connect_done(struct selector_key *key) {
   }
 }
 
+static size_t current_buffer_size = BUFFER_SIZE;
+
+void configure_buffer_size(size_t size) {
+  if (size > 0 && size <= BUFFER_SIZE) {
+    current_buffer_size = size;
+  }
+}
+
 static unsigned copy_read(struct selector_key *key) {
   client_t *s = key->data;
   int fd = key->fd;
@@ -470,6 +500,10 @@ static unsigned copy_read(struct selector_key *key) {
   size_t space;
 
   uint8_t *dst = buffer_write_ptr(buffer, &space);
+  // limitar read size a current_buffer_size
+  if (space > current_buffer_size) {
+    space = current_buffer_size;
+  }
   ssize_t n = recv(fd, dst, space, 0);
 
   if (n < 0) {

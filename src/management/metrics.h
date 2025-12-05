@@ -2,15 +2,16 @@
 #define METRICS_H
 #include <stdint.h>
 
-
 typedef enum {
-   AUTH,
-   METRICS, //todo (historic, current, transferred)
-   ADD_USER, 
-   DEL_USER,
-   LIST_USERS,
-   QUIT,
-   UNKNOWN
+  AUTH,
+  METRICS, // todo (historic, current, transferred)
+  ADD_USER,
+  DEL_USER,
+  LIST_USERS,
+  SHOW_LOGS,
+  SET_BUFFER,
+  QUIT,
+  UNKNOWN,
 } mng_cmd;
 
 uint8_t *write_metrics(void);

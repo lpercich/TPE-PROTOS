@@ -79,7 +79,7 @@ DEL_USER admin
 
 ### 4. LIST_USERS
 
-Lista todos los usuarios configurados.
+Lista todos los usuarios registrados.
 
 **Petición:**
 ```
@@ -88,16 +88,45 @@ LIST_USERS\n
 
 **Respuesta:**
 ```
-<usuario1> \n
-<usuario2> \n
++OK <usuario1> <usuario2> ...\r\n
+```
+
+### 5. SHOW_LOGS
+
+Devuelve los últimos registros de acceso (conexiones exitosas y fallidas).
+
+**Petición:**
+```
+SHOW_LOGS\n
+```
+
+**Respuesta:**
+```
++OK\r\n
+[TIMESTAMP] user=... src=... dst=... status=...\n
 ...
 ```
 
-**Ejemplo:**
+### 6. SET_BUFFER
+
+Cambia el tamaño del buffer de lectura/escritura para las nuevas conexiones SOCKS5.
+
+**Petición:**
 ```
-LIST_USERS
-admin 
-invitado 
+SET_BUFFER <bytes>\n
+```
+
+**Respuesta:**
+- Éxito: `+OK buffer size cambiado a <bytes>\r\n`
+- Fallo: `-ERR tamaño invalido\r\n`
+
+### 7. QUIT
+
+Cierra la conexión de administración.
+
+**Petición:**
+```
+QUIT\n
 ```
 
 ## Autenticación

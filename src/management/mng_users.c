@@ -172,6 +172,17 @@ mng_cmd parse_command(const char *line, char *arg) {
   if (strcasecmp(cmd, "LIST_USERS") == 0)
     return LIST_USERS;
 
+  if (strcasecmp(cmd, "SHOW_LOGS") == 0)
+    return SHOW_LOGS;
+
+  if (strcasecmp(cmd, "SET_BUFFER") == 0) {
+    char *size = strtok_r(NULL, " \r\n", &saveptr);
+    if (!size)
+      return UNKNOWN;
+    strncpy(arg, size, 127);
+    return SET_BUFFER;
+  }
+
   if (strcasecmp(cmd, "QUIT") == 0)
     return QUIT;
 

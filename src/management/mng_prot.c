@@ -1,4 +1,5 @@
 #include "mng_prot.h"
+#include "logger.h"
 #include "mng_auth.h"
 #include "mng_users.h"
 #include "selector.h"
@@ -418,6 +419,53 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     buffer_write_adv(&m->write_buffer, len);
     free(list);
     selector_set_interest_key(key, OP_WRITE);
+    return MNG_CMD_WRITE;
+  }
+
+  case SHOW_LOGS: {
+    char *logs = read_access_logs();
+    if (!logs) {
+      reply_error(key, "-ERR no se pudo obtener logs\r\n");
+      return MNG_CMD_WRITE;
+    }
+    size_t len = strlen(logs);
+    uint8_t *dst;
+    size_t space;
+    dst = buffer_write_ptr(&m->write_buffer, &space);
+    if (space < len) {
+      free(logs);
+      reply_error(key, "-ERR buffer muy chico para logs\r\n");
+      return MNG_CMD_WRITE;
+    }
+    memcpy(dst, logs, len);
+    buffer_write_adv(&m->write_buffer, len);
+    free(logs);
+    selector_set_interest_key(key, OP_WRITE);
+    return MNG_CMD_WRITE;
+  }
+
+  case SET_BUFFER: {
+    // Parse size from m->arg
+    int size = atoi(m->arg);
+    if (size <= 0 || size > 65535) {
+      reply_error(key, "-ERR tamaño invalido (1-65535)\r\n");
+      return MNG_CMD_WRITE;
+    }
+
+    // Call function to update buffer size
+    extern void configure_buffer_size(size_t size);
+    configure_buffer_size((size_t)size);
+
+    char tmp[BUFFER_SIZE];
+    snprintf(tmp, sizeof(tmp), "+OK buffer size cambiado a %d\r\n", size);
+    size_t space;
+    uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
+    size_t len = strlen(tmp);
+    if (space >= len) {
+      memcpy(dst, tmp, len);
+      buffer_write_adv(&m->write_buffer, len);
+      selector_set_interest_key(key, OP_WRITE);
+    }
     return MNG_CMD_WRITE;
   }
 
