@@ -23,7 +23,7 @@ bool init_users(void) {
 }
 
 void parse_user(const char *user, char **username, char **password) {
-  if (user == NULL | username == NULL | password == NULL) {
+  if (user == NULL || username == NULL || password == NULL) {
     return;
   }
   char *separator = strchr(user, ':');
