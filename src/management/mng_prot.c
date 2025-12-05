@@ -160,27 +160,30 @@ static unsigned mng_auth_read(struct selector_key *key) {
   if (ret == 0)
     return MNG_DONE;
 
+  printf("MNG Read: %zd bytes\n", ret);
   buffer_write_adv(&m->read_buffer, ret);
   // Parseamos
   mng_auth_state st =
       mng_auth_consume(&m->read_buffer, &m->mng_auth_parser, &errored);
-  if (errored)
+  if (errored) {
     reply_error(key, "-ERR command too long\n\r");
     return MNG_ERROR;
+  }
   if (st == AUTH_CMD_DONE) {
     m->cmd = parse_command(m->mng_auth_parser.buffer, m->arg);
 
     const char *response;
     if (m->cmd != AUTH) {
       m->auth_success = false;
-      reply_error(key,"-ERR unknown command\r\n"); 
+      reply_error(key, "-ERR unknown command\r\n");
     } else {
       char *username = NULL;
       char *password = NULL;
       parse_user(m->arg, &username, &password);
 
       if (username == NULL || password == NULL) {
-         reply_error(key,"-ERR invalid AUTH format, expected AUTH user:password\r\n");
+        reply_error(
+            key, "-ERR invalid AUTH format, expected AUTH user:password\r\n");
         if (username)
           free(username);
         if (password)
@@ -336,9 +339,9 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     if (!username || !password) {
       reply_error(key, "-ERR expected format USER:PASSWORD\r\n");
       if (username)
-          free(username);
-        if (password)
-          free(password);
+        free(username);
+      if (password)
+        free(password);
       return MNG_CMD_WRITE;
     }
 
@@ -348,10 +351,9 @@ static unsigned mng_cmd_read(struct selector_key *key) {
       reply_error(key, tmp);
     } else {
       char tmp[BUFFER_SIZE];
-      snprintf(tmp, sizeof(tmp), "+OK user %s added correctly\r\n",
-               username);
-      //implementar REPLY CUANDO HAY EXITO!!!!!
-      //reply_success(key, tmp);
+      snprintf(tmp, sizeof(tmp), "+OK user %s added correctly\r\n", username);
+      // implementar REPLY CUANDO HAY EXITO!!!!!
+      // reply_success(key, tmp);
       size_t space;
       uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
       size_t len = strlen(tmp);
@@ -378,7 +380,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     } else {
       char tmp[BUFFER_SIZE];
       snprintf(tmp, sizeof(tmp), "+OK user %s deleted\r\n", m->arg);
-      reply_error(key, tmp); //CAMBIAR POR REPLY SUCCESS
+      reply_error(key, tmp); // CAMBIAR POR REPLY SUCCESS
     }
     return MNG_CMD_WRITE;
   }
