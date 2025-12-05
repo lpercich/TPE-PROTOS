@@ -1,6 +1,6 @@
 #include "args.h"
 #include "dns.h"
-#include "metrics.h"
+#include "management/metrics.h"
 #include "parsers/request.h"
 #include "selector.h"
 #include "stm.h"

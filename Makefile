@@ -14,9 +14,10 @@ OBJ_DIR = obj
 LIB_DIR = $(SRC_DIR)/lib
 PARSERS_DIR = $(SRC_DIR)/parsers
 SOCKS5_DIR = $(SRC_DIR)/socks5
+MANAGEMENT_DIR = $(SRC_DIR)/management
 
 # Include paths
-INCLUDES = -I$(SRC_DIR) -I$(LIB_DIR) -I$(PARSERS_DIR) -I$(SOCKS5_DIR)
+INCLUDES = -I$(SRC_DIR) -I$(LIB_DIR) -I$(PARSERS_DIR) -I$(SOCKS5_DIR) -I$(MANAGEMENT_DIR)
 
 # Source files
 SRCS = $(SRC_DIR)/main.c \
@@ -33,10 +34,10 @@ SRCS = $(SRC_DIR)/main.c \
        $(SRC_DIR)/server.c \
        $(SRC_DIR)/socks5/socks5.c \
        $(SRC_DIR)/socks5/dns.c \
-       $(SRC_DIR)/socks5/metrics.c \
-       $(SRC_DIR)/socks5/mng_auth.c \
-       $(SRC_DIR)/socks5/mng_prot.c \
-       $(SRC_DIR)/socks5/mng_users.c
+       $(MANAGEMENT_DIR)/metrics.c \
+       $(MANAGEMENT_DIR)/mng_auth.c \
+       $(MANAGEMENT_DIR)/mng_prot.c \
+       $(MANAGEMENT_DIR)/mng_users.c
 
 # Object files
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))

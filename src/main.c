@@ -13,8 +13,8 @@
 #include <unistd.h>
 
 #include "args.h"
+#include "management/mng_prot.h"
 #include "server.h"
-#include "socks5/mng_prot.h"
 
 static bool terminate = false;
 
@@ -95,7 +95,7 @@ static int create_tcp_server_socket(const char *addr, const char *port) {
   return sfd;
 }
 
-#include "socks5/mng_users.h"
+#include "management/mng_users.h"
 
 int main(const int argc, char **argv) {
   // 1. Parsear argumentos (para obtener el puerto)
