@@ -3,6 +3,7 @@
 #include "lib/netutils.h"
 #include "management/logger.h"
 #include "management/metrics.h"
+#include "management/mng_users.h"
 #include "parsers/request.h"
 #include "selector.h"
 #include "stm.h"
@@ -88,17 +89,7 @@ static void on_request(const unsigned state, struct selector_key *key) {
 }
 
 static bool validate_credentials(client_t *s) {
-  // Iteramos sobre los usuarios configurados en args
-  for (int i = 0; i < MAX_USERS; i++) {
-    if (s->args->users[i].name == NULL)
-      break; // Fin de la lista
-
-    if (strcmp(s->credentials.username, s->args->users[i].name) == 0 &&
-        strcmp(s->credentials.password, s->args->users[i].pass) == 0) {
-      return true;
-    }
-  }
-  return false;
+  return check_credentials(s->credentials.username, s->credentials.password);
 }
 
 // HELLO READ: Recibe datos del cliente y alimenta al parser

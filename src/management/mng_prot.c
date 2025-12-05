@@ -417,7 +417,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     }
     memcpy(dst, list, len);
     buffer_write_adv(&m->write_buffer, len);
-    free(list);
+    // free(list); // list is static buffer, do not free
     selector_set_interest_key(key, OP_WRITE);
     return MNG_CMD_WRITE;
   }
@@ -428,17 +428,26 @@ static unsigned mng_cmd_read(struct selector_key *key) {
       reply_error(key, "-ERR no se pudo obtener logs\r\n");
       return MNG_CMD_WRITE;
     }
-    size_t len = strlen(logs);
+
+    char header[] = "+OK\r\n";
+    size_t header_len = strlen(header);
+    size_t logs_len = strlen(logs);
+    size_t total_len = header_len + logs_len;
+
     uint8_t *dst;
     size_t space;
     dst = buffer_write_ptr(&m->write_buffer, &space);
-    if (space < len) {
+
+    if (space < total_len) {
       free(logs);
       reply_error(key, "-ERR buffer muy chico para logs\r\n");
       return MNG_CMD_WRITE;
     }
-    memcpy(dst, logs, len);
-    buffer_write_adv(&m->write_buffer, len);
+
+    memcpy(dst, header, header_len);
+    memcpy(dst + header_len, logs, logs_len);
+    buffer_write_adv(&m->write_buffer, total_len);
+
     free(logs);
     selector_set_interest_key(key, OP_WRITE);
     return MNG_CMD_WRITE;

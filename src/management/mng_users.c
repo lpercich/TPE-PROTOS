@@ -16,6 +16,8 @@ bool init_users(void) {
     parse_user(admin, &username, &password);
     if (username && password) {
       add_user(username, password);
+      free(username);
+      free(password);
     }
   }
 
@@ -105,10 +107,11 @@ char *list_users() {
   for (int i = 0; i < user_count; i++) {
     if (users[i].is_active) {
       int written =
-          snprintf(buf + pos, strlen(buf) - pos, "%s \n", users[i].username);
-      if (written < 0 || written >= (int)(strlen(buf) - pos)) {
+          snprintf(buf + pos, sizeof(buf) - pos, "%s \n", users[i].username);
+      if (written < 0 || written >= (int)(sizeof(buf) - pos)) {
         break;
       }
+      pos += written;
     }
   }
 
