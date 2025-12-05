@@ -46,7 +46,12 @@ TARGET = socks5d
 
 .PHONY: all clean release
 
-all: $(TARGET)
+
+# Client
+CLIENT_SRCS = src/client.c
+CLIENT_OBJS = obj/client.o
+
+all: $(TARGET) client
 
 release: CFLAGS = $(CFLAGS_COMMON) $(CFLAGS_RELEASE)
 release: LDFLAGS = $(LDFLAGS_RELEASE)
@@ -55,9 +60,12 @@ release: clean all
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
 
+client: $(CLIENT_OBJS)
+	$(CC) $(LDFLAGS) -o client $(CLIENT_OBJS)
+
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET)
+	rm -rf $(OBJ_DIR) $(TARGET) client

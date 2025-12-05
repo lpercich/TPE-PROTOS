@@ -1,12 +1,13 @@
 #include "mng_prot.h"
+#include "mng_auth.h"
+#include "mng_users.h"
 #include "selector.h"
 #include "stm.h"
 #include <errno.h>
-#include <sys/socket.h>
-#include <string.h>
-#include "mng_auth.h"
-#include "mng_users.h"
 #include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 static unsigned mng_auth_read(struct selector_key *key);
 static unsigned mng_auth_write(struct selector_key *key);
@@ -14,270 +15,481 @@ static unsigned mng_cmd_read(struct selector_key *key);
 static unsigned mng_cmd_write(struct selector_key *key);
 static unsigned mng_close_connection(struct selector_key *key);
 static unsigned mng_close_connection_error(struct selector_key *key);
-void reply_error(struct selector_key *key, char * msj);
+void reply_error(struct selector_key *key, char *msj);
 
 static const struct state_definition metp_states[] = {
-    [MNG_AUTH] ={
-        .state          = MNG_AUTH,
-        .on_read_ready  = mng_auth_read,
-    },
-    [MNG_AUTH_REPLY] ={
-        .state          = MNG_AUTH_REPLY,
-        .on_write_ready  = mng_auth_write,
-    },
-    [MNG_CMD_READ] = {
-        .state          = MNG_CMD_READ,
-        .on_read_ready  = mng_cmd_read,
-    },
-    [MNG_CMD_WRITE] = {
-        .state          = MNG_CMD_WRITE,
-        .on_write_ready = mng_cmd_write,
-    },
-    [MNG_DONE] = {
-        .state          = MNG_DONE,
-        .on_read_ready  = mng_close_connection,
-    },
+    [MNG_AUTH] =
+        {
+            .state = MNG_AUTH,
+            .on_read_ready = mng_auth_read,
+        },
+    [MNG_AUTH_REPLY] =
+        {
+            .state = MNG_AUTH_REPLY,
+            .on_write_ready = mng_auth_write,
+        },
+    [MNG_CMD_READ] =
+        {
+            .state = MNG_CMD_READ,
+            .on_read_ready = mng_cmd_read,
+        },
+    [MNG_CMD_WRITE] =
+        {
+            .state = MNG_CMD_WRITE,
+            .on_write_ready = mng_cmd_write,
+        },
+    [MNG_DONE] =
+        {
+            .state = MNG_DONE,
+            .on_read_ready = mng_close_connection,
+        },
     [MNG_ERROR] = {
-        .state          = MNG_ERROR,
+        .state = MNG_ERROR,
         .on_write_ready = mng_close_connection_error,
-    }
+    }};
+
+static void mng_read(struct selector_key *key);
+static void mng_write(struct selector_key *key);
+static void mng_close(struct selector_key *key);
+
+static const struct fd_handler mng_handler = {
+    .handle_read = mng_read,
+    .handle_write = mng_write,
+    .handle_close = mng_close,
 };
 
-static bool validate_credentials(metrics_t *m) {
-  for (int i = 0; i < m->user_count; i++) {
-    if (m->users[i].username == NULL)
-      break; // Fin de la lista
-
-    if (strcmp(m->credentials.username, m->users[i].username) == 0 &&
-        strcmp(m->credentials.password, m->users[i].password) == 0) {
-      return true;
-    }
+static void mng_read(struct selector_key *key) {
+  metrics_t *m = key->data;
+  unsigned state = stm_handler_read(&m->stm, key);
+  if (state == MNG_ERROR || state == MNG_DONE) {
+    selector_unregister_fd(key->s, key->fd);
   }
-  return false;
 }
+
+static void mng_write(struct selector_key *key) {
+  metrics_t *m = key->data;
+  unsigned state = stm_handler_write(&m->stm, key);
+  if (state == MNG_ERROR || state == MNG_DONE) {
+    selector_unregister_fd(key->s, key->fd);
+  }
+}
+
+static void mng_close(struct selector_key *key) {
+  metrics_t *m = key->data;
+  if (m == NULL)
+    return;
+
+  // selector_unregister_fd calls this, so we don't call it back.
+  // We just close the fd and free memory.
+  if (key->fd != -1) {
+    close(key->fd);
+  }
+  free(m);
+  key->data = NULL;
+}
+
+void mng_passive_accept(struct selector_key *key) {
+  struct sockaddr_storage client_addr;
+  socklen_t client_addr_len = sizeof(client_addr);
+  metrics_t *state = NULL;
+
+  const int client =
+      accept(key->fd, (struct sockaddr *)&client_addr, &client_addr_len);
+  if (client == -1) {
+    return;
+  }
+
+  if (selector_fd_set_nio(client) == -1) {
+    goto fail;
+  }
+
+  state = malloc(sizeof(metrics_t));
+  if (state == NULL) {
+    goto fail;
+  }
+  memset(state, 0, sizeof(*state));
+  state->fd = client;
+
+  // Initialize buffers
+  buffer_init(&state->read_buffer, sizeof(state->raw_buff_read),
+              state->raw_buff_read);
+  buffer_init(&state->write_buffer, sizeof(state->raw_buff_write),
+              state->raw_buff_write);
+
+  // Initialize auth parser
+  state->mng_auth_parser.state = AUTH_CMD_START;
+
+  // Initialize STM
+  state->stm.initial = MNG_AUTH;
+  state->stm.max_state = MNG_ERROR;
+  state->stm.states = metp_states;
+  state->stm.current = NULL;
+  stm_init(&state->stm);
+
+  if (selector_register(key->s, client, &mng_handler, OP_READ, state) !=
+      SELECTOR_SUCCESS) {
+    goto fail;
+  }
+  return;
+
+fail:
+  if (client != -1) {
+    close(client);
+  }
+  if (state != NULL) {
+    free(state);
+  }
+}
+
 static unsigned mng_auth_read(struct selector_key *key) {
-    metrics_t * m= key->data;
-    bool errored = false;
-    size_t nbyte;
-    uint8_t *ptr = buffer_write_ptr(&m->read_buffer, &nbyte);
-    ssize_t ret = recv(key->fd, ptr, nbyte, 0);
-    if (ret <= 0) return MNG_ERROR;
-    buffer_write_adv(&m->read_buffer, ret);
-    //Parseamos
-    mng_auth_state st = mng_auth_consume(&m->read_buffer, &m->mng_auth_parser, &errored);
-    if(errored) return MNG_ERROR;
-    if (st == AUTH_CMD_DONE) {
-        return MNG_AUTH_REPLY;
+  metrics_t *m = key->data;
+  bool errored = false;
+  size_t nbyte;
+  uint8_t *ptr = buffer_write_ptr(&m->read_buffer, &nbyte);
+  ssize_t ret = recv(key->fd, ptr, nbyte, 0);
+
+  if (ret < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return MNG_AUTH;
     }
-    return MNG_AUTH;
+    return MNG_ERROR;
+  }
+
+  if (ret == 0)
+    return MNG_DONE;
+
+  buffer_write_adv(&m->read_buffer, ret);
+  // Parseamos
+  mng_auth_state st =
+      mng_auth_consume(&m->read_buffer, &m->mng_auth_parser, &errored);
+  if (errored)
+    return MNG_ERROR;
+  if (st == AUTH_CMD_DONE) {
+    m->cmd = parse_command(m->mng_auth_parser.buffer, m->arg);
+
+    const char *response;
+    if (m->cmd != AUTH) {
+      response = "-ERR comando desconocido\r\n";
+      size_t len = strlen(response);
+      size_t space;
+      uint8_t *ptr = buffer_write_ptr(&m->write_buffer, &space);
+      if (space >= len) {
+        memcpy(ptr, response, len);
+        buffer_write_adv(&m->write_buffer, len);
+      }
+      m->auth_success = false;
+    } else {
+      char *username = NULL;
+      char *password = NULL;
+      parse_user(m->arg, &username, &password);
+
+      if (username == NULL || password == NULL) {
+        response =
+            "-ERR formato AUTH invalido, se espera AUTH usuario:clave\r\n";
+        size_t len = strlen(response);
+        size_t space;
+        uint8_t *ptr = buffer_write_ptr(&m->write_buffer, &space);
+        if (space >= len) {
+          memcpy(ptr, response, len);
+          buffer_write_adv(&m->write_buffer, len);
+        }
+        if (username)
+          free(username);
+        if (password)
+          free(password);
+
+        // Reset parser
+        m->mng_auth_parser.state = AUTH_CMD_START;
+        buffer_reset(&m->read_buffer);
+        m->auth_success = false;
+      } else {
+        // Check credentials
+        memset(m->credentials.username, 0, sizeof(m->credentials.username));
+        memset(m->credentials.password, 0, sizeof(m->credentials.password));
+        strncpy(m->credentials.username, username,
+                sizeof(m->credentials.username) - 1);
+        strncpy(m->credentials.password, password,
+                sizeof(m->credentials.password) - 1);
+        free(username);
+        free(password);
+
+        m->auth_success =
+            check_credentials(m->credentials.username, m->credentials.password);
+
+        if (m->auth_success) {
+          response = "+OK autenticacion exitosa\r\n";
+        } else {
+          response = "-ERR credenciales invalidas\r\n";
+          // Reset parser
+          m->mng_auth_parser.state = AUTH_CMD_START;
+          buffer_reset(&m->read_buffer);
+        }
+        size_t len = strlen(response);
+        size_t space;
+        uint8_t *ptr = buffer_write_ptr(&m->write_buffer, &space);
+        if (space >= len) {
+          memcpy(ptr, response, len);
+          buffer_write_adv(&m->write_buffer, len);
+        }
+      }
+    }
+
+    selector_set_interest_key(key, OP_WRITE);
+    return MNG_AUTH_REPLY;
+  }
+  return MNG_AUTH;
 }
 
 static unsigned mng_auth_write(struct selector_key *key) {
-    metrics_t *m = key->data;
+  metrics_t *m = key->data;
+  size_t count;
+  uint8_t *out = buffer_read_ptr(&m->write_buffer, &count);
 
-
-    const char *response;
-
-    if (m->cmd != AUTH) {
-        response = "-ERR unknown command\r\n";
-        send(key->fd, response, strlen(response), MSG_NOSIGNAL);
-        return MNG_AUTH;
+  if (count > 0) {
+    ssize_t w = send(m->fd, out, count, MSG_NOSIGNAL);
+    if (w < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return MNG_AUTH_REPLY;
+      }
+      return MNG_ERROR;
     }
-    
-    char *username = NULL;
-    char *password = NULL;
-    
-    parse_user(m->arg, &username, &password);
-    size_t user_length = username ? strlen(username) : 0;
-    size_t password_length = password ? strlen(password) : 0;
+    buffer_read_adv(&m->write_buffer, w);
+  }
 
-    
-    if (username == NULL || password == NULL) {
-        response = "-ERR invalid AUTH format, expected AUTH user:pass\r\n";
-        send(key->fd, response, strlen(response), MSG_NOSIGNAL);
-    
-        free(username);
-        free(password);
-         
-        return MNG_AUTH;
-    }
-
-    // Copiar credenciales a la estructura
-    memset(m->credentials.username, 0, sizeof(m->credentials.username));
-    memset(m->credentials.password, 0, sizeof(m->credentials.password));
-
-    strncpy(m->credentials.username, username, sizeof(m->credentials.username) - 1);
-    strncpy(m->credentials.password, password, sizeof(m->credentials.password) - 1);
-
-    free(username);
-    free(password);
-
-    m->auth_success = validate_credentials(m);
-
+  if (!buffer_can_read(&m->write_buffer)) {
     if (m->auth_success) {
-        response = "+OK authentication successful\r\n";
-        send(key->fd, response, strlen(response), MSG_NOSIGNAL);
-        return MNG_CMD_READ;  
+      selector_set_interest_key(key, OP_READ);
+      buffer_reset(&m->read_buffer);
+      return MNG_CMD_READ;
     } else {
-        response = "-ERR invalid credentials\r\n";
-        send(key->fd, response, strlen(response), MSG_NOSIGNAL);
-        return MNG_AUTH;  // Permitimos reintentar
+      selector_set_interest_key(key, OP_READ);
+      return MNG_AUTH;
     }
+  }
+
+  return MNG_AUTH_REPLY;
 }
 
-
 static unsigned mng_cmd_read(struct selector_key *key) {
-    metrics_t* m= key->data;
-    size_t len;
-    unsigned state = MNG_ERROR;
+  metrics_t *m = key->data;
+  size_t len;
 
-    uint8_t *ptr = buffer_write_ptr(&m->read_buffer, &len);
-    ssize_t n = recv(m->fd, ptr, len, 0); 
+  uint8_t *ptr = buffer_write_ptr(&m->read_buffer, &len);
+  ssize_t n = recv(m->fd, ptr, len, 0);
 
-    if(n<0){
-        reply_error(key, "management recv failed\n");
-        return MNG_ERROR; 
+  if (n < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return MNG_CMD_READ;
+    }
+    return MNG_ERROR;
+  }
+
+  if (n == 0) {
+    return MNG_DONE;
+  }
+
+  char line[BUFFER_SIZE] = {0};
+  size_t i = 0;
+
+  buffer_write_adv(&m->read_buffer, n);
+
+  size_t read_len;
+  uint8_t *read_ptr = buffer_read_ptr(&m->read_buffer, &read_len);
+  bool found_newline = false;
+
+  i = 0;
+  while (i < read_len && i < BUFFER_SIZE - 1) {
+    line[i] = read_ptr[i];
+    if (line[i] == '\n') {
+      line[i + 1] = '\0';
+      found_newline = true;
+      buffer_read_adv(&m->read_buffer, i + 1);
+      break;
+    }
+    i++;
+  }
+
+  if (!found_newline) {
+    if (read_len >= BUFFER_SIZE - 1) {
+      reply_error(key, "-ERR linea muy larga\r\n");
+      buffer_reset(&m->read_buffer);
+    }
+    return MNG_CMD_READ;
+  }
+
+  line[strcspn(line, "\r\n")] = '\0';
+  m->cmd = parse_command(line, m->arg);
+
+  switch (m->cmd) {
+  case AUTH:
+    reply_error(key, "-ERR ya autenticado\r\n");
+    return MNG_CMD_WRITE;
+
+  case METRICS: {
+    uint8_t *out = write_metrics();
+    size_t len = strlen((char *)out);
+    // Check space in write buffer
+    size_t space;
+    uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
+    if (space >= len) {
+      memcpy(dst, out, len);
+      buffer_write_adv(&m->write_buffer, len);
+      free(out);
+      selector_set_interest_key(key, OP_WRITE);
+      return MNG_CMD_WRITE;
+    } else {
+      free(out);
+      return MNG_ERROR;
+    }
+  }
+  case ADD_USER: {
+    char *username = NULL;
+    char *password = NULL;
+    parse_user(m->arg, &username, &password);
+    if (!username || !password) {
+      reply_error(key, "-ERR formato esperado USUARIO:CLAVE\r\n");
+      free(username);
+      free(password);
+      return MNG_CMD_WRITE;
     }
 
-    if(n==0){
+    if (!add_user(username, password)) {
+      char tmp[BUFFER_SIZE];
+      snprintf(tmp, sizeof(tmp), "-ERR usuario %s ya existe\r\n", username);
+      reply_error(key, tmp);
+    } else {
+      char tmp[BUFFER_SIZE];
+      snprintf(tmp, sizeof(tmp), "+OK usuario %s agregado exitosamente\r\n",
+               username);
+      size_t space;
+      uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
+      size_t len = strlen(tmp);
+      if (space >= len) {
+        memcpy(dst, tmp, len);
+        buffer_write_adv(&m->write_buffer, len);
         selector_set_interest_key(key, OP_WRITE);
-        return MNG_CMD_WRITE; //o done ¿?
+      }
     }
+    free(username);
+    free(password);
+    return MNG_CMD_WRITE;
+  }
 
-    char line[BUFFER_SIZE] = {0};
-    size_t i = 0;
-
-    while (i < len && i < sizeof(line) - 1) {
-        line[i] = ptr[i];
-        if (line[i] == '\n') break;
-        i++;
+  case DEL_USER: {
+    if (strlen(m->arg) == 0) {
+      reply_error(key, "-ERR falta usuario\r\n");
+      return MNG_CMD_WRITE;
     }
-
-    if (i == len || line[i] != '\n') {
-        return MNG_CMD_READ;  //no terminamos, seguimos leyedno
+    if (!del_user(m->arg)) {
+      char tmp[BUFFER_SIZE];
+      snprintf(tmp, sizeof(tmp), "-ERR usuario %s no existe\r\n", m->arg);
+      reply_error(key, tmp);
+    } else {
+      char tmp[BUFFER_SIZE];
+      snprintf(tmp, sizeof(tmp), "+OK usuario %s eliminado\r\n", m->arg);
+      size_t space;
+      uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
+      size_t len = strlen(tmp);
+      if (space >= len) {
+        memcpy(dst, tmp, len);
+        buffer_write_adv(&m->write_buffer, len);
+        selector_set_interest_key(key, OP_WRITE);
+      }
     }
-    
-    buffer_write_adv(&m->read_buffer, n);
-    
-    line[strcspn(line, "\r\n")] = '\0';
-    m->cmd = parse_command(line , m->arg);
-    switch(m->cmd){
-        case AUTH: 
-            return MNG_AUTH;
-        case METRICS: {
-            uint8_t * out = write_metrics();
-            len= strlen(out)+1;
-            buffer_write_adv(out, len);
-        }
-        case ADD_USER: {
-            char *username = NULL;
-            char *password = NULL;
-            parse_user(m->arg, &username, &password);
-            if (!username || !password) {
-                reply_error(key, "-ERR expected USER:PASS format\r\n");
-                free(username);
-                free(password);
-                return MNG_CMD_READ;
-            }
+    return MNG_CMD_WRITE;
+  }
 
-            if (!add_user(username, password)) {
-                char tmp[BUFFER_SIZE];
-                snprintf(tmp, sizeof(tmp), "-ERR user %s already exists\r\n", username);
-                reply_error(key, tmp);
-            } else {
-                char tmp[BUFFER_SIZE];
-                snprintf(tmp, sizeof(tmp), "+OK user %s added successfully\r\n", username);
-                send(m->fd, tmp, strlen(tmp), MSG_NOSIGNAL);
-            }
-            free(username);
-            free(password);
-            return MNG_CMD_READ;
-        }
-
-        case DEL_USER: {
-            if (m->arg == NULL || strlen(m->arg) == 0) {
-                reply_error(key, "-ERR missing username\r\n");
-                return MNG_CMD_READ;
-            }
-            if (!del_user(m->arg)) {
-                char tmp[BUFFER_SIZE];
-                snprintf(tmp, sizeof(tmp), "-ERR user %s does not exist\r\n", m->arg);
-                reply_error(key, tmp);
-            } else {
-            char tmp[BUFFER_SIZE];
-            snprintf(tmp, sizeof(tmp), "+OK user %s deleted\r\n", m->arg);
-            send(m->fd, tmp, strlen(tmp), MSG_NOSIGNAL);
-        }
-        return MNG_CMD_READ;
-        }
-
-        case LIST_USERS: {
-            char *list = list_users();
-            if (!list) {
-                reply_error(key, "-ERR could not obtain user list\r\n");
-                return MNG_CMD_READ;
-            }
-            size_t len = strlen(list);
-            uint8_t *dst;
-            size_t space;
-            dst = buffer_write_ptr(&m->write_buffer, &space);
-            if (space < len) {
-                free(list);
-                reply_error(key, "-ERR buffer too small\r\n");
-                return MNG_ERROR;
-            }
-            memcpy(dst, list, len);
-            buffer_write_adv(&m->write_buffer, len);
-            free(list);
-            return MNG_CMD_WRITE;
-        }
-
-        default:
-        return MNG_ERROR;
-        
-    
+  case LIST_USERS: {
+    char *list = list_users();
+    if (!list) {
+      reply_error(key, "-ERR no se pudo obtener lista de usuarios\r\n");
+      return MNG_CMD_WRITE;
     }
+    size_t len = strlen(list);
+    uint8_t *dst;
+    size_t space;
+    dst = buffer_write_ptr(&m->write_buffer, &space);
+    if (space < len) {
+      free(list);
+      reply_error(key, "-ERR buffer muy chico\r\n");
+      return MNG_CMD_WRITE;
+    }
+    memcpy(dst, list, len);
+    buffer_write_adv(&m->write_buffer, len);
+    free(list);
+    selector_set_interest_key(key, OP_WRITE);
+    return MNG_CMD_WRITE;
+  }
 
+  case QUIT:
+    return MNG_DONE;
+
+  default:
+    reply_error(key, "-ERR comando desconocido\r\n");
+    return MNG_CMD_WRITE;
+  }
 }
 
 static unsigned mng_cmd_write(struct selector_key *key) {
-    metrics_t* m= key->data;
-    size_t count;
-    uint8_t * out = buffer_read_ptr(&m->write_buffer, &count);
-    if (count > 0) {
-        ssize_t w = send(m->fd, out, count, 0);
-        if (w < 0) {
-            return MNG_ERROR;
-        }
-        buffer_read_adv(&m->write_buffer, w);
+  metrics_t *m = key->data;
+  size_t count;
+  uint8_t *out = buffer_read_ptr(&m->write_buffer, &count);
+  if (count > 0) {
+    ssize_t w = send(m->fd, out, count, MSG_NOSIGNAL);
+    if (w < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return MNG_CMD_WRITE;
+      }
+      return MNG_ERROR;
+    }
+    buffer_read_adv(&m->write_buffer, w);
+  }
+
+  if (!buffer_can_read(&m->write_buffer)) {
+    selector_set_interest_key(key, OP_READ);
+    return MNG_CMD_READ;
+  }
+
+  return MNG_CMD_WRITE;
 }
-}
+
 static unsigned mng_close_connection(struct selector_key *key) {
-    
+  return MNG_DONE;
 }
 
 static unsigned mng_close_connection_error(struct selector_key *key) {
-    metrics_t* m= key->data;
-    size_t count;
-    uint8_t * out = buffer_read_ptr(&m->write_buffer, &count);
-    if (count > 0) {
-        ssize_t w = send(m->fd, out, count, 0);
+  metrics_t *m = key->data;
+  size_t count;
+  uint8_t *out = buffer_read_ptr(&m->write_buffer, &count);
+  if (count > 0) {
+    ssize_t w;
+    while (count > 0) {
+      w = send(m->fd, out, count, MSG_NOSIGNAL);
+      if (w < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break; // Can't send more now, but we are closing, so give up
+        }
+        break; // Error
+      }
+      buffer_read_adv(&m->write_buffer, w);
+      out = buffer_read_ptr(&m->write_buffer, &count);
     }
-    //esto quiza lo paso a done ¿?
-    selector_unregister_fd(key->s, m->fd);
-    close(m->fd);
-    return MNG_DONE;
+  }
+  selector_unregister_fd(key->s, m->fd);
+  // close(m->fd); // Handled by mng_close callback
+  return MNG_DONE;
 }
 
-void reply_error(struct selector_key *key, char * msg){
-    metrics_t* m= key->data;
-    if(m==NULL) return;
-    size_t count;
-    uint8_t *out = buffer_write_ptr(&m->write_buffer, &count);
-    size_t len = strlen(msg);
-    if (len > count) len = count;
-    memcpy(out, msg, len);
-    buffer_write_adv(&m->write_buffer, len);
-    selector_set_interest_key(key, OP_WRITE);
+void reply_error(struct selector_key *key, char *msg) {
+  metrics_t *m = key->data;
+  if (m == NULL)
+    return;
+  size_t count;
+  uint8_t *out = buffer_write_ptr(&m->write_buffer, &count);
+  size_t len = strlen(msg);
+  if (len > count)
+    len = count;
+  memcpy(out, msg, len);
+  buffer_write_adv(&m->write_buffer, len);
+  selector_set_interest_key(key, OP_WRITE);
 }
-

@@ -14,6 +14,7 @@
 
 #include "args.h"
 #include "server.h"
+#include "socks5/mng_prot.h"
 
 static bool terminate = false;
 
@@ -85,13 +86,24 @@ static int create_tcp_server_socket(const char *addr, const char *port) {
     return -1;
   }
 
+  if (selector_fd_set_nio(sfd) == -1) {
+    perror("selector_fd_set_nio");
+    close(sfd);
+    return -1;
+  }
+
   return sfd;
 }
+
+#include "socks5/mng_users.h"
 
 int main(const int argc, char **argv) {
   // 1. Parsear argumentos (para obtener el puerto)
   struct socks5args args;
   parse_args(argc, argv, &args);
+
+  // Inicializar usuarios de gestión
+  init_users();
 
   setbuf(stdout, NULL);
 
@@ -145,6 +157,48 @@ int main(const int argc, char **argv) {
                                          &selector_handler, OP_READ, &args);
   if (ss != SELECTOR_SUCCESS) {
     fprintf(stderr, "Fallo registrando servidor: %s\n", selector_error(ss));
+    selector_destroy(selector);
+    selector_close();
+    close(server_socket);
+    return 1;
+  }
+
+  // 4b. Inicializar Servidor de Gestión (MNG)
+  char mng_port_str[8];
+  snprintf(mng_port_str, sizeof(mng_port_str), "%d", args.mng_port);
+
+  int mng_socket = create_tcp_server_socket(args.mng_addr, mng_port_str);
+  if (mng_socket < 0) {
+    fprintf(stderr, "Fallo iniciando servidor de gestión en %s:%s\n",
+            args.mng_addr, mng_port_str);
+    // No es fatal, podemos seguir sin gestión o abortar. La consigna implica
+    // que es parte del sistema. Abortamos para ser seguros.
+    selector_destroy(selector);
+    selector_close();
+    close(server_socket);
+    return 1;
+  }
+
+  if (selector_fd_set_nio(mng_socket) == -1) {
+    perror("Fallo configurando mng socket como no-bloqueante");
+    close(mng_socket);
+    selector_destroy(selector);
+    selector_close();
+    close(server_socket);
+    return 1;
+  }
+
+  const struct fd_handler mng_handler = {
+      .handle_read = mng_passive_accept,
+      .handle_write = NULL,
+      .handle_close = NULL,
+  };
+
+  ss = selector_register(selector, mng_socket, &mng_handler, OP_READ, &args);
+  if (ss != SELECTOR_SUCCESS) {
+    fprintf(stderr, "Fallo registrando servidor de gestión: %s\n",
+            selector_error(ss));
+    close(mng_socket);
     selector_destroy(selector);
     selector_close();
     close(server_socket);

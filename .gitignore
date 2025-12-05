@@ -3,3 +3,4 @@ obj
 socks5d
 stress_test.py
 test_suite.sh
+client

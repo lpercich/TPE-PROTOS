@@ -1,114 +1,122 @@
-# Management Protocol (MNG) Specification
+# Protocolo de Gestión (MNG)
 
-This document defines the text-based management protocol for the SOCKSv5 proxy server. The protocol runs on a dedicated TCP port (default 8080) and allows administrators to monitor metrics and manage users.
+Este documento define el protocolo de gestión basado en texto para el servidor proxy SOCKSv5. El protocolo corre en un puerto TCP dedicado (por defecto 8080) y permite a los administradores monitorear métricas y gestionar usuarios.
 
-## General Format
+## Formato General
 
-- **Transport**: TCP
-- **Encoding**: ASCII / UTF-8
-- **Line Terminator**: `\n` (LF)
-- **Structure**: Request-Response. The server processes one command at a time per connection.
+- **Transporte**: TCP
+- **Codificación**: ASCII / UTF-8
+- **Terminador de Línea**: `\n` (LF)
+- **Estructura**: Petición-Respuesta. El servidor procesa un comando a la vez por conexión.
 
-## Commands
+## Comandos
 
-### 1. GET METRICS
+### 1. METRICS
 
-Retrieves current server metrics.
+Obtiene las métricas actuales del servidor.
 
-**Request:**
+**Petición:**
 ```
-GET METRICS\n
-```
-
-**Response:**
-```
-CONN_CURR: <integer>\n
-BYTES_TRANSFERRED: <integer>\n
-CONN_HIST: <integer>\n
-OK\n
+METRICS\n
 ```
 
-**Example:**
+**Respuesta:**
 ```
-GET METRICS
-CONN_CURR: 5
-BYTES_TRANSFERRED: 102400
-CONN_HIST: 120
-OK
-```
-
-### 2. ADDUSER
-
-Adds a new user for SOCKSv5 authentication.
-
-**Request:**
-```
-ADDUSER <username>:<password>\n
++OK metricas\r\n
+conexiones_totales: <entero>\r\n
+conexiones_actuales: <entero>\r\n
+bytes_transferidos: <entero>\r\n
 ```
 
-**Response:**
-- Success: `OK\n`
-- Failure (User exists): `ERR_EXISTS\n`
-- Failure (Max users reached): `ERR_FULL\n`
-
-**Example:**
+**Ejemplo:**
 ```
-ADDUSER admin:secret123
-OK
+METRICS
++OK metricas
+conexiones_totales: 5
+conexiones_actuales: 1
+bytes_transferidos: 102400
 ```
 
-### 3. DELUSER
+### 2. ADD_USER
 
-Deletes an existing user.
+Agrega un nuevo usuario para la autenticación SOCKSv5.
 
-**Request:**
+**Petición:**
 ```
-DELUSER <username>\n
-```
-
-**Response:**
-- Success: `OK\n`
-- Failure (User not found): `ERR_NOT_FOUND\n`
-
-**Example:**
-```
-DELUSER admin
-OK
+ADD_USER <usuario>:<contraseña>\n
 ```
 
-### 4. LISTUSERS
+**Respuesta:**
+- Éxito: `+OK usuario <usuario> agregado exitosamente\r\n`
+- Fallo (Usuario existe): `-ERR usuario <usuario> ya existe\r\n`
+- Fallo (Error de formato): `-ERR formato esperado USUARIO:CLAVE\r\n`
 
-Lists all configured users.
+**Ejemplo:**
+```
+ADD_USER admin:secreto123
++OK usuario admin agregado exitosamente
+```
 
-**Request:**
+### 3. DEL_USER
+
+Elimina un usuario existente.
+
+**Petición:**
 ```
-LISTUSERS\n
+DEL_USER <usuario>\n
 ```
 
-**Response:**
+**Respuesta:**
+- Éxito: `+OK usuario <usuario> eliminado\r\n`
+- Fallo (Usuario no encontrado): `-ERR usuario <usuario> no existe\r\n`
+- Fallo (Falta argumento): `-ERR falta usuario\r\n`
+
+**Ejemplo:**
 ```
-USER: <username1>\n
-USER: <username2>\n
+DEL_USER admin
++OK usuario admin eliminado
+```
+
+### 4. LIST_USERS
+
+Lista todos los usuarios configurados.
+
+**Petición:**
+```
+LIST_USERS\n
+```
+
+**Respuesta:**
+```
+<usuario1> \n
+<usuario2> \n
 ...
-OK\n
 ```
 
-**Example:**
+**Ejemplo:**
 ```
-LISTUSERS
-USER: admin
-USER: guest
-OK
-```
-
-## Error Handling
-
-If an unknown command is received:
-```
-ERR_UNKNOWN_CMD\n
+LIST_USERS
+admin 
+invitado 
 ```
 
-If arguments are missing or invalid:
+## Autenticación
+
+Al conectarse, el cliente debe autenticarse.
+
+**Petición:**
 ```
-ERR_INVALID_ARGS\n
+AUTH <usuario>:<contraseña>\n
+```
+
+**Respuesta:**
+- Éxito: `+OK autenticacion exitosa\r\n`
+- Fallo: `-ERR credenciales invalidas\r\n`
+- Fallo (Formato): `-ERR formato AUTH invalido, se espera AUTH usuario:clave\r\n`
+
+## Manejo de Errores
+
+Si se recibe un comando desconocido:
+```
+-ERR comando desconocido\r\n
 ```

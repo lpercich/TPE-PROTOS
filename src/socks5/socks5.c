@@ -1,5 +1,6 @@
 #include "args.h"
 #include "dns.h"
+#include "metrics.h"
 #include "parsers/request.h"
 #include "selector.h"
 #include "stm.h"
@@ -109,8 +110,15 @@ static unsigned on_hello_read(struct selector_key *key) {
   uint8_t *ptr = buffer_write_ptr(&session->read_buffer, &nbyte);
   ssize_t ret = recv(key->fd, ptr, nbyte, 0);
 
-  if (ret <= 0)
-    return ERROR; // O hubo un error o se cerro la conexion
+  if (ret < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return HELLO_READ;
+    }
+    return ERROR;
+  }
+  if (ret == 0) {
+    return ERROR;
+  }
   buffer_write_adv(&session->read_buffer, ret);
 
   // Alimento al parser
@@ -200,8 +208,15 @@ static unsigned on_auth_read(struct selector_key *key) {
   size_t nbyte;
   uint8_t *ptr = buffer_write_ptr(&s->read_buffer, &nbyte);
   ssize_t ret = recv(key->fd, ptr, nbyte, 0);
-  if (ret <= 0)
+  if (ret < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return AUTH_READ;
+    }
     return ERROR;
+  }
+  if (ret == 0) {
+    return ERROR;
+  }
   buffer_write_adv(&s->read_buffer, ret);
 
   // 2. Parsear
@@ -458,6 +473,9 @@ static unsigned copy_read(struct selector_key *key) {
   ssize_t n = recv(fd, dst, space, 0);
 
   if (n < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return s->stm.current->state;
+    }
     perror("COPY recv");
     return ERROR;
   }
@@ -473,6 +491,7 @@ static unsigned copy_read(struct selector_key *key) {
   }
 
   buffer_write_adv(buffer, n);
+  transfer_bytes(n);
 
   selector_set_interest(key->s, origin_fd, OP_WRITE);
   selector_set_interest_key(key, buffer_can_write(buffer) ? OP_READ : OP_NOOP);
@@ -497,6 +516,9 @@ static unsigned copy_write(struct selector_key *key) {
   ssize_t sent = send(fd, src, to_send, MSG_NOSIGNAL);
 
   if (sent <= 0) {
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return s->stm.current->state;
+    }
     perror("COPY send");
     return ERROR;
   }
@@ -533,6 +555,9 @@ static unsigned on_request_read(struct selector_key *key) {
   ssize_t ret = recv(key->fd, ptr, wbytes, 0);
 
   if (ret < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return REQUEST_READ;
+    }
     return ERROR; // Error de conexión
   } else if (ret == 0) {
     return DONE; // cerro conexion
