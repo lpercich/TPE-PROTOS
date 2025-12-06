@@ -12,6 +12,7 @@
 #include "lib/selector.h"
 #include "parsers/auth.h"
 #include "parsers/hello.h"
+#include "management/metrics.h"
 #include "server.h"
 #include "socks5/socks5.h"
 #include "stm.h"
