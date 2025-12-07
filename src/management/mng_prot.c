@@ -208,9 +208,9 @@ static unsigned mng_auth_read(struct selector_key *key) {
             check_credentials(m->credentials.username, m->credentials.password);
 
         if (m->auth_success) {
-          response = "+OK autenticacion exitosa\r\n";
+          response = "+OK authentication successful\r\n";
         } else {
-          response = "-ERR credenciales invalidas\r\n";
+          response = "-ERR invalid credentials\r\n";
           // Reset parser
           m->mng_auth_parser.state = AUTH_CMD_START;
           buffer_reset(&m->read_buffer);
@@ -312,7 +312,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
 
   switch (m->cmd) {
   case AUTH:
-    reply_error(key, "-ERR ya autenticado\r\n");
+    reply_error(key, "-ERR already authenticated\r\n");
     return MNG_CMD_WRITE;
 
   case METRICS: {
