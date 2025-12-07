@@ -18,7 +18,7 @@ enum hello_state hello_consume(buffer *b, struct hello_parser *p, bool *errored)
         
         switch(state) {
             case HELLO_INITIAL:
-                if(c == 0x05) {
+                if(c == SOCKS_VERSION) {
                     state = HELLO_READ_NMETHODS; //pasamos a leer NMETHODS
                 } else {
                     if(errored) *errored = true;
@@ -70,7 +70,7 @@ int hello_reply(buffer *b, const uint8_t method) {
         uint8_t *buf = buffer_write_ptr(b, &n);
         if(n < 2) return -1;
         
-        buf[0] = 0x05;
+        buf[0] = SOCKS_VERSION;
         buf[1] = method;
         buffer_write_adv(b, 2);
         return 2;

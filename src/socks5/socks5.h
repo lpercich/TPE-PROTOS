@@ -1,6 +1,9 @@
 #ifndef SOCKS5_H
 #define SOCKS5_H
 #define BUFFER_SIZE 4096
+#define CONNECT_CMD 0x01
+#define GRAL_FAILURE 0x01
+#define HOST_UNREACHABLE 0x04
 
 #include "auth.h"
 #include "hello.h"
@@ -44,7 +47,6 @@ typedef enum socks_v5state {
   COPY,
   REQUEST_CONNECT,
   REQUEST_RESOLVE,
-  REQUEST_BIND,
 
   // estados terminales
   DONE,
