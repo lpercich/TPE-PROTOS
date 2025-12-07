@@ -39,6 +39,7 @@ void session_destroy(client_t *session) {
     session->references--;
     if (session->references == 0) {
       if (session->client_fd >= 0) {
+        end_connection();
         close(session->client_fd);
       }
       if (session->origin_fd >= 0) {
@@ -173,7 +174,6 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
 
-  // queda en standby primero probar q ande el mng protocol
   start_connection();
   printf("Nueva conexión aceptada en fd %d\n", new_fd);
 }

@@ -258,7 +258,7 @@ static unsigned on_auth_write(struct selector_key *key) {
 
   // Usamos el resultado guardado en on_auth_read
   if (s->auth_success) {
-    printf("Auth exitosa, pasando a REQUEST_READ para fd %d\n", key->fd);
+    printf("Auth exitosa, pasando a REQUEST_READ para fd %d (user= %s)\n", key->fd, s->credentials.username);
     selector_set_interest(key->s, key->fd, OP_READ);
     return REQUEST_READ;
   } else {

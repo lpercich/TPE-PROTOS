@@ -24,7 +24,7 @@ void start_connection() {
   current_connections++;
 }
 
-void end_connection() { current_connections--; }
+void end_connection() { if(current_connections>0)current_connections--; }
 
 void transfer_bytes(uint64_t bytes) { transferred_bytes += bytes; }
 
