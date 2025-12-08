@@ -97,6 +97,8 @@ typedef struct client_s {
 
   // Flag para cerrar después de vaciar el buffer de salida
   bool close_after_write;
+  bool client_closed;
+  bool origin_closed;
 
   // Campos necesarios para la conexión al servidor origen
   struct sockaddr_storage origin_addr;

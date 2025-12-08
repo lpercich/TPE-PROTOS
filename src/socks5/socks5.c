@@ -498,13 +498,19 @@ static unsigned copy_read(struct selector_key *key) {
   }
   if (n == 0) {
     if (key->fd == s->client_fd) {
+      s->client_closed = true;
       printf("COPY: CLIENT closed the conection.\n");
     } else {
+      s->origin_closed = true;
       printf("COPY: ORIGIN closed the conection.\n");
     }
 
-    s->close_after_write = true;
-    return DONE;
+    selector_set_interest(key->s, key->fd, OP_NOOP);
+    if (!buffer_can_read(buffer)) {
+      return DONE;
+    }
+    selector_set_interest(key->s, origin_fd, OP_WRITE);
+    return COPY;
   }
 
   buffer_write_adv(buffer, n);
@@ -564,6 +570,15 @@ static unsigned copy_write(struct selector_key *key) {
     selector_set_interest_key(key, OP_READ);
     selector_register(key->s, s->origin_fd, &session_handlers, OP_READ, s);
     return COPY;
+  }
+
+  if (!buffer_can_read(buffer)) {
+    if (is_client_fd && s->origin_closed) {
+      return DONE;
+    }
+    if (!is_client_fd && s->client_closed) {
+      return DONE;
+    }
   }
 
   return s->stm.current->state;
