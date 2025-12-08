@@ -35,8 +35,12 @@ static void user(char *s, struct users *user) {
 }
 
 static void version(void) {
-  fprintf(stderr, "socks5v version 0.0\n"
-                  "ITBA Protocolos de Comunicación 2025/1 -- Grupo 5\n");
+  fprintf(stderr, "Servidor proxy SOCKSv5 version 1.0\n"
+                  "ITBA Protocolos de Comunicación 2025 -- Grupo 5\n"
+                  "Santiago Diaz Sieiro\n"
+                  "Lucila Borinsky\n"
+                  "Luana Percich\n"
+                  "Catalina Trajterman\n");
 }
 
 static void usage(const char *progname) {
