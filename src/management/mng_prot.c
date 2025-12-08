@@ -16,7 +16,7 @@ static unsigned mng_cmd_read(struct selector_key *key);
 static unsigned mng_cmd_write(struct selector_key *key);
 static unsigned mng_close_connection(struct selector_key *key);
 static unsigned mng_close_connection_error(struct selector_key *key);
-void send_reply(struct selector_key *key, char *msj);
+void send_reply(struct selector_key *key, const char *msj);
 
 static const struct state_definition metp_states[] = {
     [MNG_AUTH] =
@@ -365,7 +365,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     } else {
       char tmp[BUFFER_SIZE];
       snprintf(tmp, sizeof(tmp), "+OK user %s deleted\r\n", m->arg);
-      send_reply(key, tmp); 
+      send_reply(key, tmp);
     }
     return MNG_CMD_WRITE;
   }
@@ -474,6 +474,7 @@ static unsigned mng_cmd_write(struct selector_key *key) {
 }
 
 static unsigned mng_close_connection(struct selector_key *key) {
+  (void)key;
   return MNG_DONE;
 }
 
@@ -500,7 +501,7 @@ static unsigned mng_close_connection_error(struct selector_key *key) {
   return MNG_DONE;
 }
 
-void send_reply(struct selector_key *key, char *msg) {
+void send_reply(struct selector_key *key, const char *msg) {
   metrics_t *m = key->data;
   if (m == NULL)
     return;
@@ -513,6 +514,3 @@ void send_reply(struct selector_key *key, char *msg) {
   buffer_write_adv(&m->write_buffer, len);
   selector_set_interest_key(key, OP_WRITE);
 }
-
-
-

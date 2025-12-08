@@ -27,26 +27,11 @@ static unsigned on_request_read(struct selector_key *key);
 static unsigned on_request_write(struct selector_key *key);
 static unsigned copy_write(struct selector_key *key);
 static unsigned copy_read(struct selector_key *key);
-static unsigned request_connect_init(const unsigned state,
-                                     struct selector_key *key);
 static unsigned request_connect_done(struct selector_key *key);
 static unsigned on_request_resolve(struct selector_key *key);
-
-static void socks5_client_read(struct selector_key *key);
-static void socks5_client_write(struct selector_key *key);
-static void socks5_client_close(struct selector_key *key);
-static void socks5_client_block(struct selector_key *key);
-
 extern const struct fd_handler *get_session_handler();
 
 extern const struct fd_handler session_handlers;
-
-static const struct fd_handler socks5_handler = {
-    .handle_read = socks5_client_read,
-    .handle_write = socks5_client_write,
-    .handle_close = socks5_client_close,
-    .handle_block = socks5_client_block,
-};
 
 static const struct state_definition socks5_states[] = {
     [HELLO_READ] = {.state = HELLO_READ, .on_read_ready = on_hello_read},
@@ -79,6 +64,7 @@ void socks5_init(client_t *s) {
 }
 
 static void on_request(const unsigned state, struct selector_key *key) {
+  (void)state;
   client_t *s = key->data;
   request_parser_init(&s->request_parser);
   selector_set_interest_key(key, OP_READ);
@@ -167,8 +153,8 @@ static unsigned on_hello_write(struct selector_key *key) {
   }
 
   // Ya mandamos todo el saludo - transicionamos según el método elegido
-  printf("Handshake completed for fd %d, chosen method: 0x%02X\n",
-         key->fd, session->chosen_method);
+  printf("Handshake completed for fd %d, chosen method: 0x%02X\n", key->fd,
+         session->chosen_method);
 
   if (session->chosen_method == SOCKS_HELLO_USERPASS_AUTH) {
     // Inicializar el parser de autenticación
@@ -254,7 +240,8 @@ static unsigned on_auth_write(struct selector_key *key) {
 
   // Usamos el resultado guardado en on_auth_read
   if (s->auth_success) {
-    printf("Successful auth, moving to REQUEST_READ for fd %d (user= %s)\n", key->fd, s->credentials.username);
+    printf("Successful auth, moving to REQUEST_READ for fd %d (user= %s)\n",
+           key->fd, s->credentials.username);
     selector_set_interest(key->s, key->fd, OP_READ);
     return REQUEST_READ;
   } else {
@@ -360,8 +347,8 @@ static unsigned process_request(struct selector_key *key) {
     request_reply reply = {
         .version = SOCKS5_VERSION,
         .status = (saved_errno == ENETUNREACH || saved_errno == EHOSTUNREACH)
-                      ? HOST_UNREACHABLE //0x04
-                      : GRAL_FAILURE, //0x01
+                      ? HOST_UNREACHABLE // 0x04
+                      : GRAL_FAILURE,    // 0x01
         .bnd.atyp = ATYP_IPV4,
         .bnd.addr = {0},
         .bnd.port = 0};
@@ -449,12 +436,14 @@ static unsigned request_connect_done(struct selector_key *key) {
     s->origin_fd = -1;
 
     // Preparar respuesta de error
-    request_reply reply = {
-        .version = SOCKS5_VERSION,
-        .status = (error == ENETUNREACH || error == EHOSTUNREACH) ? HOST_UNREACHABLE : GRAL_FAILURE,
-        .bnd.atyp = ATYP_IPV4,
-        .bnd.addr = {0},
-        .bnd.port = 0};
+    request_reply reply = {.version = SOCKS5_VERSION,
+                           .status =
+                               (error == ENETUNREACH || error == EHOSTUNREACH)
+                                   ? HOST_UNREACHABLE
+                                   : GRAL_FAILURE,
+                           .bnd.atyp = ATYP_IPV4,
+                           .bnd.addr = {0},
+                           .bnd.port = 0};
 
     if (-1 == request_marshall(&s->write_buffer, &reply)) {
       return ERROR;
@@ -705,7 +694,7 @@ static unsigned on_request_resolve(struct selector_key *key) {
 
     request_reply rep = {
         .version = SOCKS5_VERSION,
-        .status = HOST_UNREACHABLE, 
+        .status = HOST_UNREACHABLE,
         .bnd.atyp = ATYP_IPV4,
         .bnd.port = 0,
     };
@@ -735,59 +724,6 @@ static unsigned on_request_resolve(struct selector_key *key) {
   return init_connection_to_origin(s, key);
 }
 
-static void socks5_client_read(struct selector_key *key) {
-  client_t *session = key->data;
-  // Guardamos el estado al que transicionó
-  unsigned state = stm_handler_read(&session->stm, key);
-
-  // Si terminamos o hubo error, cerramos todo
-  if (state == DONE || state == ERROR) {
-    int other_fd = -1;
-    if (key->fd == session->client_fd) {
-      other_fd = session->origin_fd;
-    } else if (key->fd == session->origin_fd) {
-      other_fd = session->client_fd;
-    }
-
-    selector_unregister_fd(key->s, key->fd);
-
-    if (other_fd >= 0) {
-      selector_unregister_fd(key->s, other_fd);
-    }
-  }
-}
-
-static void socks5_client_write(struct selector_key *key) {
-  client_t *session = key->data;
-  unsigned state = stm_handler_write(&session->stm, key);
-
-  if (state == DONE || state == ERROR) {
-    selector_unregister_fd(key->s, key->fd);
-  }
-}
-
-static void socks5_client_block(struct selector_key *key) {
-  client_t *session = key->data;
-  stm_handler_block(&session->stm, key);
-}
-
-static void socks5_client_close(struct selector_key *key) {
-  client_t *session = key->data;
-
-  if (session == NULL) {
-    return;
-  }
-
-  stm_handler_close(&session->stm, key);
-
-  if (key->fd == session->client_fd) {
-    session->client_fd = -1;
-  } else if (key->fd == session->origin_fd) {
-    session->origin_fd = -1;
-  }
-
-  session_destroy(session);
-}
+// unused functions removed
 
 const struct fd_handler *get_session_handler(void) { return &session_handlers; }
-

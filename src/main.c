@@ -104,6 +104,11 @@ int main(const int argc, char **argv) {
 
   // Inicializar usuarios de gestión
   init_users();
+  for (int i = 0; i < MAX_USERS; i++) {
+    if (args.users[i].name != NULL) {
+      add_user(args.users[i].name, args.users[i].pass);
+    }
+  }
 
   setbuf(stdout, NULL);
 

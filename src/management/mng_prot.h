@@ -12,8 +12,6 @@
 #define CMD_SIZE 16
 #define ARG_SIZE 128
 
-
-
 typedef enum {
   MNG_AUTH,
   MNG_AUTH_REPLY,
@@ -40,6 +38,7 @@ typedef struct {
 
 } metrics_t;
 
+void send_reply(struct selector_key *key, const char *msj);
 void mng_passive_accept(struct selector_key *key);
 
 #endif
