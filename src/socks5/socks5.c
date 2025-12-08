@@ -258,6 +258,13 @@ static unsigned process_request(struct selector_key *key) {
 
   // 1. Validar comando (Solo soportamos CONNECT 0x01)
   if (p->cmd != CONNECT_CMD) {
+    printf("comando no es CONNECT");
+    request_reply reply = {.version = SOCKS5_VERSION,
+                         .status = 0x07,
+                         .bnd.atyp = ATYP_IPV4,
+                         .bnd.addr = {0},
+                         .bnd.port = 0};
+    request_marshall(&s->write_buffer, &reply);
     // return request_write_error(key, 0x07); // Command not supported
     return ERROR;
   }

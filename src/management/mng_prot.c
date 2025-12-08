@@ -331,7 +331,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     char *password = NULL;
     parse_user(m->arg, &username, &password);
     if (!username || !password) {
-      send_reply(key, "-ERR expected format USER:PASSWORD\r\n");
+      send_reply(key, "-ERR invalid format, expected format USER:PASSWORD\r\n");
       if (username)
         free(username);
       if (password)
@@ -427,7 +427,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     // Parse size from m->arg
     int size = atoi(m->arg);
     if (size <= 0 || size > 65535) {
-      send_reply(key, "-ERR invalid size (accpeted sizes: 1-65535)\r\n");
+      send_reply(key, "-ERR invalid size (accepted sizes: 1-65535)\r\n");
       return MNG_CMD_WRITE;
     }
 
