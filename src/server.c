@@ -22,10 +22,6 @@ static void on_client_write(struct selector_key *key);
 static void on_client_close(struct selector_key *key);
 static void on_client_block(struct selector_key *key);
 
-static unsigned on_hello_read(struct selector_key *key);
-static unsigned on_hello_write(struct selector_key *key);
-static unsigned on_auth_read(struct selector_key *key);
-static unsigned on_auth_write(struct selector_key *key);
 
 const struct fd_handler session_handlers = {
     .handle_read = on_client_read,
