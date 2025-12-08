@@ -1,3 +1,60 @@
-SOCKS5 Server escuchando en :::1080...
-MNG Read: 17 bytes
-MNG Auth Done. Buffer: 'AUTH admin:1234'
+SOCKS5 Server listening on :::1080...
+New connection accepted for fd 5
+Closing connection for fd 5
+New connection accepted for fd 5
+Handshake completed for fd 5, chosen method: 0x02
+Auth for fd 5: user='admin' -> SUCCESS
+Successful auth, moving to REQUEST_READ for fd 5 (user= admin)
+Request received: CMD=1, ATYP=1
+[2025-12-08T18:18:37] user=admin src=::ffff:127.0.0.1:45582 dst=142.250.78.196:80 status=CONNECT
+COPY: CLIENT closed the conection.
+Closing connection for fd 5
+Closing connection for fd 6
+New connection accepted for fd 5
+Handshake completed for fd 5, chosen method: 0x02
+Auth for fd 5: user='pepe' -> FAILURE
+Failed auth, closing connection for fd 5
+Closing connection for fd 5
+New connection accepted for fd 5
+Handshake completed for fd 5, chosen method: 0x02
+Auth for fd 5: user='admin' -> SUCCESS
+Successful auth, moving to REQUEST_READ for fd 5 (user= admin)
+Request received: CMD=1, ATYP=1
+[2025-12-08T18:18:37] user=admin src=::ffff:127.0.0.1:45614 dst=142.251.129.36:80 status=CONNECT
+COPY: CLIENT closed the conection.
+Closing connection for fd 5
+Closing connection for fd 6
+New connection accepted for fd 5
+Handshake completed for fd 5, chosen method: 0x02
+Auth for fd 5: user='admin' -> SUCCESS
+Successful auth, moving to REQUEST_READ for fd 5 (user= admin)
+Request received: CMD=1, ATYP=1
+New connection accepted for fd 7
+Handshake completed for fd 7, chosen method: 0x02
+Auth for fd 7: user='admin' -> SUCCESS
+Successful auth, moving to REQUEST_READ for fd 7 (user= admin)
+Request received: CMD=1, ATYP=1
+[2025-12-08T18:18:37] user=admin src=::ffff:127.0.0.1:45634 dst=142.251.129.36:80 status=CONNECT
+[2025-12-08T18:18:37] user=admin src=::ffff:127.0.0.1:45626 dst=142.250.78.196:80 status=CONNECT
+COPY: CLIENT closed the conection.
+Closing connection for fd 7
+Closing connection for fd 8
+COPY: CLIENT closed the conection.
+Closing connection for fd 5
+Closing connection for fd 6
+New connection accepted for fd 5
+Handshake completed for fd 5, chosen method: 0x02
+Auth for fd 5: user='admin' -> SUCCESS
+Successful auth, moving to REQUEST_READ for fd 5 (user= admin)
+Request received: CMD=1, ATYP=1
+[2025-12-08T18:18:38] user=admin src=::ffff:127.0.0.1:45640 dst=142.251.129.36:443 status=CONNECT
+COPY: CLIENT closed the conection.
+Closing connection for fd 5
+Closing connection for fd 6
+New connection accepted for fd 5
+Handshake completed for fd 5, chosen method: 0x02
+Auth for fd 5: user='admin' -> SUCCESS
+Successful auth, moving to REQUEST_READ for fd 5 (user= admin)
+Request received: CMD=1, ATYP=4
+Closing connection for fd 5
+Signal 15 received, shutting down server...

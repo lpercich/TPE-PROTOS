@@ -260,10 +260,10 @@ static unsigned process_request(struct selector_key *key) {
   if (p->cmd != CONNECT_CMD) {
     printf("comando no es CONNECT");
     request_reply reply = {.version = SOCKS5_VERSION,
-                         .status = 0x07,
-                         .bnd.atyp = ATYP_IPV4,
-                         .bnd.addr = {0},
-                         .bnd.port = 0};
+                           .status = 0x07,
+                           .bnd.atyp = ATYP_IPV4,
+                           .bnd.addr = {0},
+                           .bnd.port = 0};
     request_marshall(&s->write_buffer, &reply);
     // return request_write_error(key, 0x07); // Command not supported
     return ERROR;
@@ -513,7 +513,13 @@ static unsigned copy_read(struct selector_key *key) {
   selector_set_interest(key->s, origin_fd, OP_WRITE);
   selector_set_interest_key(key, buffer_can_write(buffer) ? OP_READ : OP_NOOP);
 
-  return s->stm.current->state;
+  // Intentamos escribir inmediatamente
+  struct selector_key write_key = {
+      .s = key->s,
+      .fd = origin_fd,
+      .data = s,
+  };
+  return copy_write(&write_key);
 }
 
 static unsigned copy_write(struct selector_key *key) {
