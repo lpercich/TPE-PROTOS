@@ -11,9 +11,9 @@
 int main(int argc, char *argv[]) {
   // Uso: ./client <ip> <port> <user>:<pass> <cmd>
   if (argc < 5) {
-    fprintf(stderr, "Uso: %s <ip> <port> <user>:<pass> <comando...>\n",
+    fprintf(stderr, "Usage: %s <ip> <port> <user>:<pass> <command...>\n",
             argv[0]);
-    fprintf(stderr, "Ej: ./client 127.0.0.1 8080 admin:1234 METRICS\n");
+    fprintf(stderr, "Ex: ./client 127.0.0.1 8080 admin:1234 METRICS\n");
     return 1;
   }
 
@@ -41,7 +41,7 @@ int main(int argc, char *argv[]) {
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
   if (inet_pton(AF_INET, ip, &addr.sin_addr) <= 0) {
-    fprintf(stderr, "IP invalida\n");
+    fprintf(stderr, "Invalid IP \n");
     return 1;
   }
 
@@ -50,6 +50,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+ 
   // 2. Autenticar
   char auth_buf[1024];
   snprintf(auth_buf, sizeof(auth_buf), "AUTH %s\n", creds);
@@ -60,7 +61,7 @@ int main(int argc, char *argv[]) {
   int n = recv(sock, buf, BUF_SIZE - 1, 0);
   if (n > 0) {
     buf[n] = 0;
-    printf("Servidor: %s", buf);
+    printf("Server: %s", buf);
     if (strstr(buf, "+OK") == NULL) { // Si no dice +OK, cortamos
       close(sock);
       return 1;

@@ -39,9 +39,9 @@ uint8_t *write_metrics(void) {
 
   snprintf((char *)out, BUFSIZ,
            "+OK metrics\r\n"
-           "total conections: %llu\r\n"
-           "current conections: %llu\r\n"
-           "total transfered bytes: %llu\r\n",
+           "total connections: %llu\r\n"
+           "current connections: %llu\r\n"
+           "total transferred  bytes: %llu\r\n",
            (unsigned long long)total, (unsigned long long)current,
            (unsigned long long)bytes);
 

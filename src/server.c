@@ -109,7 +109,7 @@ static void on_client_write(struct selector_key *key) {
 // Handler de CIERRE: El socket se cerró.
 static void on_client_close(struct selector_key *key) {
   client_t *session = key->data;
-  printf("Cerrando conexión en fd %d\n", key->fd);
+  printf("Closing connection for fd %d\n", key->fd);
   session_destroy(session);
 }
 
@@ -168,12 +168,12 @@ void socksv5_passive_accept(struct selector_key *key) {
                                          OP_READ, new_session);
 
   if (ss != SELECTOR_SUCCESS) {
-    fprintf(stderr, "Error registrando cliente en selector: %s\n",
+    fprintf(stderr, "Error registering client in selector: %s\n",
             selector_error(ss));
     session_destroy(new_session); // Esto cierra el fd y libera memoria
     return;
   }
 
   start_connection();
-  printf("Nueva conexión aceptada en fd %d\n", new_fd);
+  printf("New connection accepted for fd %d\n", new_fd);
 }

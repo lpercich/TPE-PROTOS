@@ -12,6 +12,8 @@
 #define CMD_SIZE 16
 #define ARG_SIZE 128
 
+
+
 typedef enum {
   MNG_AUTH,
   MNG_AUTH_REPLY,

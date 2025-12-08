@@ -167,7 +167,7 @@ static unsigned on_hello_write(struct selector_key *key) {
   }
 
   // Ya mandamos todo el saludo - transicionamos según el método elegido
-  printf("Handshake completado para el fd %d, método elegido: 0x%02X\n",
+  printf("Handshake completed for fd %d, chosen method: 0x%02X\n",
          key->fd, session->chosen_method);
 
   if (session->chosen_method == SOCKS_HELLO_USERPASS_AUTH) {
@@ -216,7 +216,7 @@ static unsigned on_auth_read(struct selector_key *key) {
     s->auth_success = validate_credentials(s);
     uint8_t status = s->auth_success ? AUTH_SUCCESS : AUTH_FAILURE;
 
-    printf("Auth para fd %d: user='%s' -> %s\n", key->fd,
+    printf("Auth for fd %d: user='%s' -> %s\n", key->fd,
            s->credentials.username, s->auth_success ? "SUCCESS" : "FAILURE");
 
     // Preparar respuesta
@@ -254,11 +254,11 @@ static unsigned on_auth_write(struct selector_key *key) {
 
   // Usamos el resultado guardado en on_auth_read
   if (s->auth_success) {
-    printf("Auth exitosa, pasando a REQUEST_READ para fd %d (user= %s)\n", key->fd, s->credentials.username);
+    printf("Successful auth, moving to REQUEST_READ for fd %d (user= %s)\n", key->fd, s->credentials.username);
     selector_set_interest(key->s, key->fd, OP_READ);
     return REQUEST_READ;
   } else {
-    printf("Auth fallida, cerrando conexión fd %d\n", key->fd);
+    printf("Failed auth, closing connection for fd %d\n", key->fd);
     return ERROR; // Auth fallida = cerrar conexión
   }
 }
@@ -267,7 +267,7 @@ static unsigned process_request(struct selector_key *key) {
   client_t *s = key->data;
   request_parser *p = &s->request_parser;
 
-  printf("Request recibido: CMD=%d, ATYP=%d\n", p->cmd, p->atyp);
+  printf("Request received: CMD=%d, ATYP=%d\n", p->cmd, p->atyp);
 
   // 1. Validar comando (Solo soportamos CONNECT 0x01)
   if (p->cmd != CONNECT_CMD) {
@@ -502,9 +502,9 @@ static unsigned copy_read(struct selector_key *key) {
   }
   if (n == 0) {
     if (key->fd == s->client_fd) {
-      printf("COPY: El CLIENTE cerró la conexión.\n");
+      printf("COPY: CLIENT closed the conection.\n");
     } else {
-      printf("COPY: El ORIGEN cerró la conexión.\n");
+      printf("COPY: ORIGIN closed the conection.\n");
     }
 
     s->close_after_write = true;
@@ -701,7 +701,7 @@ static unsigned on_request_resolve(struct selector_key *key) {
 
   if (p == NULL) {
     // host unreachable
-    printf("DNS: dominio no resuelto.\n");
+    printf("DNS: domain not resolved.\n");
 
     request_reply rep = {
         .version = SOCKS5_VERSION,

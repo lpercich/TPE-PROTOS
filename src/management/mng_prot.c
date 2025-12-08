@@ -16,7 +16,7 @@ static unsigned mng_cmd_read(struct selector_key *key);
 static unsigned mng_cmd_write(struct selector_key *key);
 static unsigned mng_close_connection(struct selector_key *key);
 static unsigned mng_close_connection_error(struct selector_key *key);
-void reply_error(struct selector_key *key, char *msj);
+void send_reply(struct selector_key *key, char *msj);
 
 static const struct state_definition metp_states[] = {
     [MNG_AUTH] =
@@ -153,7 +153,7 @@ static unsigned mng_auth_read(struct selector_key *key) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return MNG_AUTH;
     }
-    reply_error(key, "-ERR unexpected read error\n\r");
+    send_reply(key, "-ERR unexpected read error\n\r");
     return MNG_ERROR;
   }
 
@@ -166,7 +166,7 @@ static unsigned mng_auth_read(struct selector_key *key) {
   mng_auth_state st =
       mng_auth_consume(&m->read_buffer, &m->mng_auth_parser, &errored);
   if (errored) {
-    reply_error(key, "-ERR command too long\n\r");
+    send_reply(key, "-ERR command too long\n\r");
     return MNG_ERROR;
   }
   if (st == AUTH_CMD_DONE) {
@@ -175,15 +175,15 @@ static unsigned mng_auth_read(struct selector_key *key) {
     const char *response;
     if (m->cmd != AUTH) {
       m->auth_success = false;
-      reply_error(key, "-ERR unknown command\r\n");
+      send_reply(key, "-ERR unknown command\r\n");
     } else {
       char *username = NULL;
       char *password = NULL;
       parse_user(m->arg, &username, &password);
 
       if (username == NULL || password == NULL) {
-        reply_error(
-            key, "-ERR invalid AUTH format, expected AUTH user:password\r\n");
+        send_reply(
+            key, "-ERR invalid AUTH format, expected: AUTH user:password\r\n");
         if (username)
           free(username);
         if (password)
@@ -215,13 +215,7 @@ static unsigned mng_auth_read(struct selector_key *key) {
           m->mng_auth_parser.state = AUTH_CMD_START;
           buffer_reset(&m->read_buffer);
         }
-        size_t len = strlen(response);
-        size_t space;
-        uint8_t *ptr = buffer_write_ptr(&m->write_buffer, &space);
-        if (space >= len) {
-          memcpy(ptr, response, len);
-          buffer_write_adv(&m->write_buffer, len);
-        }
+        send_reply(key, response);
       }
       selector_set_interest_key(key, OP_WRITE);
     }
@@ -301,7 +295,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
 
   if (!found_newline) {
     if (read_len >= BUFFER_SIZE - 1) {
-      reply_error(key, "-ERR linea muy larga\r\n");
+      send_reply(key, "-ERR line too long\r\n");
       buffer_reset(&m->read_buffer);
     }
     return MNG_CMD_READ;
@@ -312,7 +306,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
 
   switch (m->cmd) {
   case AUTH:
-    reply_error(key, "-ERR already authenticated\r\n");
+    send_reply(key, "-ERR already authenticated\r\n");
     return MNG_CMD_WRITE;
 
   case METRICS: {
@@ -337,7 +331,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     char *password = NULL;
     parse_user(m->arg, &username, &password);
     if (!username || !password) {
-      reply_error(key, "-ERR expected format USER:PASSWORD\r\n");
+      send_reply(key, "-ERR expected format USER:PASSWORD\r\n");
       if (username)
         free(username);
       if (password)
@@ -348,20 +342,11 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     if (!add_user(username, password)) {
       char tmp[BUFFER_SIZE];
       snprintf(tmp, sizeof(tmp), "-ERR user %s already exist\r\n", username);
-      reply_error(key, tmp);
+      send_reply(key, tmp);
     } else {
       char tmp[BUFFER_SIZE];
       snprintf(tmp, sizeof(tmp), "+OK user %s added correctly\r\n", username);
-      // implementar REPLY CUANDO HAY EXITO!!!!!
-      // reply_success(key, tmp);
-      size_t space;
-      uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
-      size_t len = strlen(tmp);
-      if (space >= len) {
-        memcpy(dst, tmp, len);
-        buffer_write_adv(&m->write_buffer, len);
-        selector_set_interest_key(key, OP_WRITE);
-      }
+      send_reply(key, tmp);
     }
     free(username);
     free(password);
@@ -370,17 +355,17 @@ static unsigned mng_cmd_read(struct selector_key *key) {
 
   case DEL_USER: {
     if (strlen(m->arg) == 0) {
-      reply_error(key, "-ERR user missing\r\n");
+      send_reply(key, "-ERR user missing\r\n");
       return MNG_CMD_WRITE;
     }
     if (!del_user(m->arg)) {
       char tmp[BUFFER_SIZE];
       snprintf(tmp, sizeof(tmp), "-ERR user %s does not exist\r\n", m->arg);
-      reply_error(key, tmp);
+      send_reply(key, tmp);
     } else {
       char tmp[BUFFER_SIZE];
       snprintf(tmp, sizeof(tmp), "+OK user %s deleted\r\n", m->arg);
-      reply_error(key, tmp); // CAMBIAR POR REPLY SUCCESS
+      send_reply(key, tmp); 
     }
     return MNG_CMD_WRITE;
   }
@@ -388,7 +373,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
   case LIST_USERS: {
     char *list = list_users();
     if (!list) {
-      reply_error(key, "-ERR could not retrieve user list\r\n");
+      send_reply(key, "-ERR could not retrieve user list\r\n");
       return MNG_CMD_WRITE;
     }
     size_t len = strlen(list);
@@ -397,7 +382,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     dst = buffer_write_ptr(&m->write_buffer, &space);
     if (space < len) {
       free(list);
-      reply_error(key, "-ERR buffer too small\r\n");
+      send_reply(key, "-ERR buffer too small\r\n");
       return MNG_CMD_WRITE;
     }
     memcpy(dst, list, len);
@@ -410,7 +395,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
   case SHOW_LOGS: {
     char *logs = read_access_logs();
     if (!logs) {
-      reply_error(key, "-ERR no se pudo obtener logs\r\n");
+      send_reply(key, "-ERR could not get logs\r\n");
       return MNG_CMD_WRITE;
     }
 
@@ -425,7 +410,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
 
     if (space < total_len) {
       free(logs);
-      reply_error(key, "-ERR buffer muy chico para logs\r\n");
+      send_reply(key, "-ERR buffer too small for logs\r\n");
       return MNG_CMD_WRITE;
     }
 
@@ -442,7 +427,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     // Parse size from m->arg
     int size = atoi(m->arg);
     if (size <= 0 || size > 65535) {
-      reply_error(key, "-ERR tamaño invalido (1-65535)\r\n");
+      send_reply(key, "-ERR invalid size (accpeted sizes: 1-65535)\r\n");
       return MNG_CMD_WRITE;
     }
 
@@ -451,15 +436,8 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     configure_buffer_size((size_t)size);
 
     char tmp[BUFFER_SIZE];
-    snprintf(tmp, sizeof(tmp), "+OK buffer size cambiado a %d\r\n", size);
-    size_t space;
-    uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
-    size_t len = strlen(tmp);
-    if (space >= len) {
-      memcpy(dst, tmp, len);
-      buffer_write_adv(&m->write_buffer, len);
-      selector_set_interest_key(key, OP_WRITE);
-    }
+    snprintf(tmp, sizeof(tmp), "+OK buffer size changed to %d\r\n", size);
+    send_reply(key, tmp);
     return MNG_CMD_WRITE;
   }
 
@@ -467,7 +445,7 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     return MNG_DONE;
 
   default:
-    reply_error(key, "-ERR unknown command\r\n");
+    send_reply(key, "-ERR unknown command\r\n");
     return MNG_CMD_WRITE;
   }
 }
@@ -522,7 +500,7 @@ static unsigned mng_close_connection_error(struct selector_key *key) {
   return MNG_DONE;
 }
 
-void reply_error(struct selector_key *key, char *msg) {
+void send_reply(struct selector_key *key, char *msg) {
   metrics_t *m = key->data;
   if (m == NULL)
     return;
@@ -536,7 +514,5 @@ void reply_error(struct selector_key *key, char *msg) {
   selector_set_interest_key(key, OP_WRITE);
 }
 
-/*
-void reply_success(struct selector_key *key, char *msg){
 
-}*/
+

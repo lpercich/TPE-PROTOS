@@ -20,7 +20,7 @@ static bool terminate = false;
 
 // Handler para bajar el servidor con CTRL+C
 static void sig_handler(const int signal) {
-  printf("Señal %d recibida, terminando servidor...\n", signal);
+  printf("Signal %d received, shutting down server...\n", signal);
   terminate = true;
 }
 
@@ -72,7 +72,7 @@ static int create_tcp_server_socket(const char *addr, const char *port) {
   }
 
   if (rp == NULL) {
-    fprintf(stderr, "No se pudo conectar a ninguna dirección\n");
+    fprintf(stderr, "Could not connect to any address\n");
     freeaddrinfo(result);
     return -1;
   }
@@ -114,14 +114,14 @@ int main(const int argc, char **argv) {
   // 2. Crear el socket del servidor usando create_tcp_server_socket
   int server_socket = create_tcp_server_socket(args.socks_addr, port_str);
   if (server_socket < 0) {
-    fprintf(stderr, "Fallo iniciando servidor en %s:%s\n", args.socks_addr,
+    fprintf(stderr, "Failed to start server on %s:%s\n", args.socks_addr,
             port_str);
     return 1;
   }
 
   // 3. Configurar Socket Pasivo como NO BLOQUEANTE
   if (selector_fd_set_nio(server_socket) == -1) {
-    perror("Fallo configurando server socket como no-bloqueante");
+    perror("Failed to set server socket as non-blocking\n");
     close(server_socket);
     return 1;
   }
@@ -138,14 +138,14 @@ int main(const int argc, char **argv) {
                                .select_timeout = {.tv_sec = 10, .tv_nsec = 0}};
 
   if (selector_init(&conf) != 0) {
-    fprintf(stderr, "Fallo inicializando librería selector\n");
+    fprintf(stderr, "Failed to initialize selector library\n");
     close(server_socket);
     return 1;
   }
 
   fd_selector selector = selector_new(1024);
   if (selector == NULL) {
-    fprintf(stderr, "Fallo creando instancia de selector\n");
+    fprintf(stderr, "Failed to create selector instance\n");
     selector_close();
     close(server_socket);
     return 1;
@@ -156,7 +156,7 @@ int main(const int argc, char **argv) {
   selector_status ss = selector_register(selector, server_socket,
                                          &selector_handler, OP_READ, &args);
   if (ss != SELECTOR_SUCCESS) {
-    fprintf(stderr, "Fallo registrando servidor: %s\n", selector_error(ss));
+    fprintf(stderr, "Failed to register server: %s\n", selector_error(ss));
     selector_destroy(selector);
     selector_close();
     close(server_socket);
@@ -169,7 +169,7 @@ int main(const int argc, char **argv) {
 
   int mng_socket = create_tcp_server_socket(args.mng_addr, mng_port_str);
   if (mng_socket < 0) {
-    fprintf(stderr, "Fallo iniciando servidor de gestión en %s:%s\n",
+    fprintf(stderr, "Failed to start management server on %s:%s\n",
             args.mng_addr, mng_port_str);
     // No es fatal, podemos seguir sin gestión o abortar. La consigna implica
     // que es parte del sistema. Abortamos para ser seguros.
@@ -180,7 +180,7 @@ int main(const int argc, char **argv) {
   }
 
   if (selector_fd_set_nio(mng_socket) == -1) {
-    perror("Fallo configurando mng socket como no-bloqueante");
+    perror("Failed to configure mng socket as non-blocking");
     close(mng_socket);
     selector_destroy(selector);
     selector_close();
@@ -196,7 +196,7 @@ int main(const int argc, char **argv) {
 
   ss = selector_register(selector, mng_socket, &mng_handler, OP_READ, &args);
   if (ss != SELECTOR_SUCCESS) {
-    fprintf(stderr, "Fallo registrando servidor de gestión: %s\n",
+    fprintf(stderr, "Failed to register management server: %s\n",
             selector_error(ss));
     close(mng_socket);
     selector_destroy(selector);
@@ -210,12 +210,12 @@ int main(const int argc, char **argv) {
   signal(SIGTERM, sig_handler);
   signal(SIGINT, sig_handler);
 
-  printf("SOCKS5 Server escuchando en %s:%s...\n", args.socks_addr, port_str);
+  printf("SOCKS5 Server listening on %s:%s...\n", args.socks_addr, port_str);
 
   while (!terminate) {
     ss = selector_select(selector);
     if (ss != SELECTOR_SUCCESS) {
-      fprintf(stderr, "Error en selector_select: %s\n", selector_error(ss));
+      fprintf(stderr, "Error in selector_select: %s\n", selector_error(ss));
       break;
     }
   }
