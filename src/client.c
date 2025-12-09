@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
       if (i < argc - 1)
         strcat(cmd, " ");
     }
-    char final_cmd[1024];
+    char final_cmd[1025];
     snprintf(final_cmd, sizeof(final_cmd), "%s\n", cmd);
     send(sock, final_cmd, strlen(final_cmd), 0);
 
