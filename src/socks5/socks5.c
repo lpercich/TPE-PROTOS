@@ -265,7 +265,6 @@ static unsigned process_request(struct selector_key *key) {
                            .bnd.addr = {0},
                            .bnd.port = 0};
     request_marshall(&s->write_buffer, &reply);
-    // return request_write_error(key, 0x07); // Command not supported
     return ERROR;
   }
 
@@ -330,7 +329,6 @@ static unsigned process_request(struct selector_key *key) {
   if (ret == -1) {
     if (errno == EINPROGRESS) {
       // Conexión en curso: Registramos el origen en el selector
-      // IMPORTANTE: Usamos el mismo handler que en init_connection_to_origin
       selector_status ss = selector_register(
           key->s, s->origin_fd, get_session_handler(), OP_WRITE, s);
       if (ss != SELECTOR_SUCCESS) {
@@ -369,8 +367,6 @@ static unsigned process_request(struct selector_key *key) {
     return REQUEST_WRITE;
   }
 
-  // Conectó inmediato (raro) -> Llamar a success directo o ir a estado
-  // intermedio
   return REQUEST_CONNECT; // Dejamos que el selector nos avise WRITE igual para
                           // simplificar
 }
@@ -409,8 +405,7 @@ static unsigned request_connect_success(struct selector_key *key) {
   log_connection(s, "CONNECT");
 
   // 2. Configurar intereses COPY
-  // IMPORTANTE: Activamos OP_WRITE en el CLIENTE para que el selector
-  // llame a 'on_request_write' con la key correcta en el próximo ciclo.
+
   selector_set_interest(key->s, s->client_fd, OP_WRITE);
 
   // Escuchamos al origen (Google) por si manda datos
@@ -534,9 +529,7 @@ static unsigned copy_write(struct selector_key *key) {
   bool is_client_fd = (fd == s->client_fd);
 
   int origin_fd = is_client_fd ? s->origin_fd : s->client_fd;
-  // Si escribo al cliente, leo del buffer donde escribe el origen
-  // (write_buffer) Si escribo al origen, leo del buffer donde escribe el
-  // cliente (read_buffer)
+
   buffer *buffer = is_client_fd ? &s->write_buffer : &s->read_buffer;
 
   size_t to_send;
@@ -608,8 +601,7 @@ static unsigned on_request_read(struct selector_key *key) {
       request_consume(&s->read_buffer, &s->request_parser, &errored);
 
   if (request_is_done(st, &errored)) {
-    // ¡Tenemos el pedido completo! (Ej: CONNECT google.com:80)
-    // Procesamos el pedido (ver siguiente función)
+
     if (!errored) {
       return process_request(key);
     } else {
@@ -618,7 +610,6 @@ static unsigned on_request_read(struct selector_key *key) {
   }
 
   if (errored) {
-    // TODO: Aquí deberíamos responder error 0x01 antes de cerrar
     return ERROR;
   }
 
@@ -690,11 +681,6 @@ static unsigned on_request_write(struct selector_key *key) {
     return ERROR; // El selector cerrará el socket
   }
 
-  // Ya le dijimos al cliente "OK, conectado".
-  // Ahora pasamos al estado COPY (Túnel).
-  // Como aún no tenemos túnel real, usaremos el handler 'on_copy_read'
-  // que implementamos antes para leer y descartar (y evitar crash).
-
   selector_set_interest_key(key, OP_READ);
   // Verificar si quedaron datos del cliente pendientes de envío al origen
   if (s->origin_fd != -1) {
@@ -751,7 +737,5 @@ static unsigned on_request_resolve(struct selector_key *key) {
   // Ahora conectar
   return init_connection_to_origin(s, key);
 }
-
-// unused functions removed
 
 const struct fd_handler *get_session_handler(void) { return &session_handlers; }

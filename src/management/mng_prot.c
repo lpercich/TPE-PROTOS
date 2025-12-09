@@ -111,16 +111,13 @@ void mng_passive_accept(struct selector_key *key) {
   memset(state, 0, sizeof(*state));
   state->fd = client;
 
-  // Initialize buffers
   buffer_init(&state->read_buffer, sizeof(state->raw_buff_read),
               state->raw_buff_read);
   buffer_init(&state->write_buffer, sizeof(state->raw_buff_write),
               state->raw_buff_write);
 
-  // Initialize auth parser
   state->mng_auth_parser.state = AUTH_CMD_START;
 
-  // Initialize STM
   state->stm.initial = MNG_AUTH;
   state->stm.max_state = MNG_ERROR;
   state->stm.states = metp_states;
@@ -312,7 +309,6 @@ static unsigned mng_cmd_read(struct selector_key *key) {
   case METRICS: {
     uint8_t *out = write_metrics();
     size_t len = strlen((char *)out);
-    // Check space in write buffer
     size_t space;
     uint8_t *dst = buffer_write_ptr(&m->write_buffer, &space);
     if (space >= len) {
@@ -443,14 +439,13 @@ static unsigned mng_cmd_read(struct selector_key *key) {
   }
 
   case SET_BUFFER: {
-    // Parse size from m->arg
+
     int size = atoi(m->arg);
     if (size <= 0 || size > 65535) {
       send_reply(key, "-ERR invalid size (accepted sizes: 1-65535)\r\n");
       return MNG_CMD_WRITE;
     }
 
-    // Call function to update buffer size
     extern void configure_buffer_size(size_t size);
     configure_buffer_size((size_t)size);
 
@@ -507,16 +502,16 @@ static unsigned mng_close_connection_error(struct selector_key *key) {
       w = send(m->fd, out, count, MSG_NOSIGNAL);
       if (w < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          break; // Can't send more now, but we are closing, so give up
+          break;
         }
-        break; // Error
+        break;
       }
       buffer_read_adv(&m->write_buffer, w);
       out = buffer_read_ptr(&m->write_buffer, &count);
     }
   }
   selector_unregister_fd(key->s, m->fd);
-  // close(m->fd); // Handled by mng_close callback
+
   return MNG_DONE;
 }
 

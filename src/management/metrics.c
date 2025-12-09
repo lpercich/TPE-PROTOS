@@ -19,12 +19,14 @@ uint64_t get_current_connections() { return current_connections; }
 uint64_t get_transferred_bytes() { return transferred_bytes; }
 
 void start_connection() {
-  // agrgar máximo de conexiones ~ conexiones concurrentes ?
   historic_connections++;
   current_connections++;
 }
 
-void end_connection() { if(current_connections>0)current_connections--; }
+void end_connection() {
+  if (current_connections > 0)
+    current_connections--;
+}
 
 void transfer_bytes(uint64_t bytes) { transferred_bytes += bytes; }
 

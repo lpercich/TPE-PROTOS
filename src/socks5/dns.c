@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// CHEQUEAR!!!!!!
 void *dns_resolve(void *s_key) {
   struct selector_key *key = (struct selector_key *)s_key;
   client_t *s = key->data;

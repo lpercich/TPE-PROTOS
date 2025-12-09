@@ -4,7 +4,7 @@
 
 typedef enum {
   AUTH,
-  METRICS, // todo (historic, current, transferred)
+  METRICS,
   ADD_USER,
   DEL_USER,
   LIST_USERS,
