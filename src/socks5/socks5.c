@@ -462,10 +462,10 @@ static unsigned request_connect_done(struct selector_key *key) {
   }
 }
 
-static size_t current_buffer_size = BUFFER_SIZE;
+static size_t current_buffer_size = DEFAULT_BUFFER_SIZE;
 
 void configure_buffer_size(size_t size) {
-  if (size > 0 && size <= BUFFER_SIZE) {
+  if (size > 0 && size <= MAX_CONFIGURABLE_BUFFER && size <= BUFFER_SIZE) {
     current_buffer_size = size;
   }
 }

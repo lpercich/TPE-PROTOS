@@ -400,23 +400,42 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     }
 
     char header[] = "+OK\r\n";
-    size_t header_len = strlen(header);
+    char truncated_header[] = "+OK (truncated, showing most recent logs)\r\n";
     size_t logs_len = strlen(logs);
-    size_t total_len = header_len + logs_len;
 
     uint8_t *dst;
     size_t space;
     dst = buffer_write_ptr(&m->write_buffer, &space);
 
-    if (space < total_len) {
-      free(logs);
-      send_reply(key, "-ERR buffer too small for logs\r\n");
-      return MNG_CMD_WRITE;
-    }
+    size_t header_len = strlen(header);
+    size_t total_len = header_len + logs_len;
 
-    memcpy(dst, header, header_len);
-    memcpy(dst + header_len, logs, logs_len);
-    buffer_write_adv(&m->write_buffer, total_len);
+    if (space >= total_len) {
+      // Los logs caben completos
+      memcpy(dst, header, header_len);
+      memcpy(dst + header_len, logs, logs_len);
+      buffer_write_adv(&m->write_buffer, total_len);
+    } else {
+      // No caben todos: mostrar los más recientes
+      size_t trunc_header_len = strlen(truncated_header);
+      size_t available_for_logs = space - trunc_header_len;
+
+      if (available_for_logs > 0 && logs_len > 0) {
+        // Calcular offset para mostrar solo la parte final de los logs
+        size_t offset =
+            logs_len > available_for_logs ? logs_len - available_for_logs : 0;
+        size_t logs_to_send = logs_len - offset;
+
+        memcpy(dst, truncated_header, trunc_header_len);
+        memcpy(dst + trunc_header_len, logs + offset, logs_to_send);
+        buffer_write_adv(&m->write_buffer, trunc_header_len + logs_to_send);
+      } else {
+        // No hay espacio para nada útil
+        free(logs);
+        send_reply(key, "-ERR buffer too small\r\n");
+        return MNG_CMD_WRITE;
+      }
+    }
 
     free(logs);
     selector_set_interest_key(key, OP_WRITE);

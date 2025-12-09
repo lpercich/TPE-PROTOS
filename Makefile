@@ -1,8 +1,8 @@
 CC = gcc
 CFLAGS_COMMON = -std=c11 -D_POSIX_C_SOURCE=200809L
-CFLAGS_DEBUG = -g -Wall -Wextra -fsanitize=address -DDEBUG
+CFLAGS_DEBUG = -g -Wall -Wextra -DDEBUG
 CFLAGS_RELEASE = -O3 -DNDEBUG
-LDFLAGS_DEBUG = -fsanitize=address -pthread
+LDFLAGS_DEBUG = -pthread
 LDFLAGS_RELEASE = -pthread
 
 CFLAGS = $(CFLAGS_COMMON) $(CFLAGS_DEBUG)

@@ -185,67 +185,75 @@ print_metric "Bytes transferidos" "$BYTES_TRANSFERRED"
 print_metric "Duración total" "${DURATION}s"
 print_metric "Throughput promedio" "${THROUGHPUT} B/s"
 
-# 6. Test de impacto del tamaño de buffer
+# 6. Test de impacto del tamaño de buffer (usando servidor local para eliminar variabilidad de red)
 print_header "6. TEST DE IMPACTO DEL TAMAÑO DE BUFFER"
-echo "Comparando throughput con diferentes tamaños de buffer..."
+echo "Comparando throughput con diferentes tamaños de buffer (loopback)..."
+echo "Transfiriendo 100MB de datos por cada tamaño de buffer..."
 echo ""
+
+# Puerto para el servidor de ceros del test de buffer
+BUFFER_TEST_PORT=9998
+BUFFER_TEST_SIZE_MB=100
+BUFFER_TEST_BYTES=$((BUFFER_TEST_SIZE_MB * 1024 * 1024))
 
 # Función para ejecutar test de throughput con un tamaño de buffer específico
 run_buffer_test() {
     local BUFFER_SIZE=$1
-    local NUM_REQUESTS=50
     
     # Configurar el tamaño de buffer
     $CLIENT_BIN 127.0.0.1 $MNG_PORT $USER:$PASS "SET_BUFFER $BUFFER_SIZE" > /dev/null 2>&1
-    sleep 0.5
+    sleep 0.3
+    
+    # Iniciar servidor de ceros local
+    (
+      echo -e "HTTP/1.1 200 OK\r\nContent-Length: $BUFFER_TEST_BYTES\r\n\r\n"
+      dd if=/dev/zero bs=1048576 count=$BUFFER_TEST_SIZE_MB 2>/dev/null
+    ) | nc -l -p $BUFFER_TEST_PORT >/dev/null 2>&1 &
+    local ZERO_PID=$!
+    sleep 0.2
     
     # Capturar bytes antes
     local BYTES_BEFORE=$(get_bytes_transferred)
     local START=$(date +%s%N)
     
-    # Ejecutar requests
-    local CURL_PIDS=""
-    for i in $(seq 1 $NUM_REQUESTS); do
-        curl -x socks5h://127.0.0.1:$PROXY_PORT -U $USER:$PASS -s -o /dev/null --max-time 15 $TARGET_URL &
-        CURL_PIDS="$CURL_PIDS $!"
-    done
-    
-    # Esperar a que terminen
-    for pid in $CURL_PIDS; do
-        wait $pid 2>/dev/null || true
-    done
+    # Descargar via proxy
+    curl -s -o /dev/null -x socks5://$USER:$PASS@127.0.0.1:$PROXY_PORT http://127.0.0.1:$BUFFER_TEST_PORT 2>/dev/null || true
     
     local END=$(date +%s%N)
     local BYTES_AFTER=$(get_bytes_transferred)
+    
+    # Limpiar servidor de ceros
+    kill $ZERO_PID 2>/dev/null || true
     
     # Calcular métricas
     local DURATION_NS=$((END - START))
     local DURATION_MS=$((DURATION_NS / 1000000))
     local BYTES_TRANSFERRED=$((BYTES_AFTER - BYTES_BEFORE))
+    local MB_TRANSFERRED=$(dc -e "2k $BYTES_TRANSFERRED 1048576 / p")
     
     if [ $DURATION_MS -gt 0 ]; then
-        local THROUGHPUT_BPS=$((BYTES_TRANSFERRED * 1000 / DURATION_MS))
+        local THROUGHPUT_MBPS=$(dc -e "2k $MB_TRANSFERRED 1000 * $DURATION_MS / p")
     else
-        local THROUGHPUT_BPS=0
+        local THROUGHPUT_MBPS=0
     fi
     
-    echo "$BUFFER_SIZE $DURATION_MS $BYTES_TRANSFERRED $THROUGHPUT_BPS"
+    echo "$BUFFER_SIZE $DURATION_MS $MB_TRANSFERRED $THROUGHPUT_MBPS"
 }
 
 # Tamaños de buffer a probar (en bytes)
-BUFFER_SIZES="1024 2048 4096 8192 16384"
+BUFFER_SIZES="1024 2048 4096 8192 16384 32768 65535"
 
 echo "┌────────────┬──────────────┬─────────────────┬────────────────┐"
-echo "│ Buffer (B) │ Duración(ms) │ Bytes Transfer. │ Throughput B/s │"
+echo "│ Buffer (B) │ Duración(ms) │  MB Transfer.   │ Throughput MB/s│"
 echo "├────────────┼──────────────┼─────────────────┼────────────────┤"
 
 for SIZE in $BUFFER_SIZES; do
     RESULT=$(run_buffer_test $SIZE)
     BUF=$(echo $RESULT | awk '{print $1}')
     DUR=$(echo $RESULT | awk '{print $2}')
-    BYTES=$(echo $RESULT | awk '{print $3}')
+    MB=$(echo $RESULT | awk '{print $3}')
     THRU=$(echo $RESULT | awk '{print $4}')
-    printf "│ %10s │ %12s │ %15s │ %14s │\n" "$BUF" "$DUR" "$BYTES" "$THRU"
+    printf "│ %10s │ %12s │ %15s │ %14s │\n" "$BUF" "$DUR" "$MB" "$THRU"
 done
 
 echo "└────────────┴──────────────┴─────────────────┴────────────────┘"

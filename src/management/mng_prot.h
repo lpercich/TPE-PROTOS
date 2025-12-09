@@ -26,8 +26,8 @@ typedef struct {
   int fd;
   buffer read_buffer;
   buffer write_buffer;
-  uint8_t raw_buff_read[2048];
-  uint8_t raw_buff_write[2048];
+  uint8_t raw_buff_read[16384];
+  uint8_t raw_buff_write[16384];
 
   mng_auth_parser mng_auth_parser;
   char arg[ARG_SIZE];           // único argumento (user o user:pass)
