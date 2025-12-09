@@ -13,8 +13,7 @@ void request_parser_init(request_parser *parser) {
   parser->port = 0;
 }
 
-request_state request_consume(buffer *buffer, request_parser *p,
-                              bool *errored) {
+request_state request_consume(buffer *buffer, request_parser *p, bool *errored) {
   if (errored)
     *errored = false;
 

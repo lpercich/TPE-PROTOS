@@ -79,9 +79,6 @@ static void mng_close(struct selector_key *key) {
   metrics_t *m = key->data;
   if (m == NULL)
     return;
-
-  // selector_unregister_fd calls this, so we don't call it back.
-  // We just close the fd and free memory.
   if (key->fd != -1) {
     close(key->fd);
   }
@@ -111,10 +108,8 @@ void mng_passive_accept(struct selector_key *key) {
   memset(state, 0, sizeof(*state));
   state->fd = client;
 
-  buffer_init(&state->read_buffer, sizeof(state->raw_buff_read),
-              state->raw_buff_read);
-  buffer_init(&state->write_buffer, sizeof(state->raw_buff_write),
-              state->raw_buff_write);
+  buffer_init(&state->read_buffer, sizeof(state->raw_buff_read), state->raw_buff_read);
+  buffer_init(&state->write_buffer, sizeof(state->raw_buff_write), state->raw_buff_write);
 
   state->mng_auth_parser.state = AUTH_CMD_START;
 
@@ -159,6 +154,7 @@ static unsigned mng_auth_read(struct selector_key *key) {
 
   printf("MNG Read: %zd bytes\n", ret);
   buffer_write_adv(&m->read_buffer, ret);
+
   // Parseamos
   mng_auth_state st =
       mng_auth_consume(&m->read_buffer, &m->mng_auth_parser, &errored);
@@ -185,13 +181,10 @@ static unsigned mng_auth_read(struct selector_key *key) {
           free(username);
         if (password)
           free(password);
-
-        // Reset parser
         m->mng_auth_parser.state = AUTH_CMD_START;
         buffer_reset(&m->read_buffer);
         m->auth_success = false;
       } else {
-        // Check credentials
         memset(m->credentials.username, 0, sizeof(m->credentials.username));
         memset(m->credentials.password, 0, sizeof(m->credentials.password));
         strncpy(m->credentials.username, username,
@@ -201,14 +194,12 @@ static unsigned mng_auth_read(struct selector_key *key) {
         free(username);
         free(password);
 
-        m->auth_success =
-            check_credentials(m->credentials.username, m->credentials.password);
+        m->auth_success = check_credentials(m->credentials.username, m->credentials.password);
 
         if (m->auth_success) {
           response = "+OK authentication successful\r\n";
         } else {
           response = "-ERR invalid credentials\r\n";
-          // Reset parser
           m->mng_auth_parser.state = AUTH_CMD_START;
           buffer_reset(&m->read_buffer);
         }
@@ -383,7 +374,6 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     }
     memcpy(dst, list, len);
     buffer_write_adv(&m->write_buffer, len);
-    // free(list); // list is static buffer, do not free
     selector_set_interest_key(key, OP_WRITE);
     return MNG_CMD_WRITE;
   }
@@ -407,12 +397,12 @@ static unsigned mng_cmd_read(struct selector_key *key) {
     size_t total_len = header_len + logs_len;
 
     if (space >= total_len) {
-      // Los logs caben completos
+      // Los logs entran completos
       memcpy(dst, header, header_len);
       memcpy(dst + header_len, logs, logs_len);
       buffer_write_adv(&m->write_buffer, total_len);
     } else {
-      // No caben todos: mostrar los más recientes
+      // No entran todos: mostrar los más recientes
       size_t trunc_header_len = strlen(truncated_header);
       size_t available_for_logs = space - trunc_header_len;
 

@@ -162,8 +162,7 @@ static unsigned on_hello_write(struct selector_key *key) {
     auth_parser_init(&session->auth_parser);
 
     // Cambiar a lectura para recibir credenciales
-    selector_set_interest(key->s, key->fd,
-                          OP_READ); // aca puse read y decia write, chequear
+    selector_set_interest(key->s, key->fd, OP_READ); 
     return AUTH_READ;
   } else if (session->chosen_method == SOCKS_HELLO_NOAUTHENTICATION_REQUIRED) {
     // Sin autenticación, pasamos directo a REQUEST
@@ -256,7 +255,7 @@ static unsigned process_request(struct selector_key *key) {
 
   printf("Request received: CMD=%d, ATYP=%d\n", p->cmd, p->atyp);
 
-  // 1. Validar comando (Solo soportamos CONNECT 0x01)
+  // 1. Validar comando
   if (p->cmd != CONNECT_CMD) {
     printf("comando no es CONNECT");
     request_reply reply = {.version = SOCKS5_VERSION,
@@ -323,8 +322,7 @@ static unsigned process_request(struct selector_key *key) {
     return ERROR;
   }
 
-  int ret = connect(s->origin_fd, (struct sockaddr *)&s->origin_addr,
-                    s->origin_addr_len);
+  int ret = connect(s->origin_fd, (struct sockaddr *)&s->origin_addr, s->origin_addr_len);
 
   if (ret == -1) {
     if (errno == EINPROGRESS) {
@@ -335,8 +333,7 @@ static unsigned process_request(struct selector_key *key) {
         close(s->origin_fd);
         return ERROR;
       }
-      s->references++; // Incrementamos referencias porque ahora hay dos FDs
-                       // apuntando a s
+      s->references++; // Incrementamos referencias porque ahora hay dos FDs apuntando a s
       // Pausamos lectura del cliente
       selector_set_interest_key(key, OP_NOOP);
 
@@ -367,8 +364,7 @@ static unsigned process_request(struct selector_key *key) {
     return REQUEST_WRITE;
   }
 
-  return REQUEST_CONNECT; // Dejamos que el selector nos avise WRITE igual para
-                          // simplificar
+  return REQUEST_CONNECT; // Dejamos que el selector nos avise WRITE igual para simplificar
 }
 
 static void log_connection(client_t *s, const char *status) {
@@ -377,21 +373,19 @@ static void log_connection(client_t *s, const char *status) {
   socklen_t len = sizeof(client_addr);
 
   if (getpeername(s->client_fd, (struct sockaddr *)&client_addr, &len) == 0) {
-    sockaddr_to_human(src_addr, sizeof(src_addr),
-                      (struct sockaddr *)&client_addr);
+    sockaddr_to_human(src_addr, sizeof(src_addr), (struct sockaddr *)&client_addr);
   } else {
     strncpy(src_addr, "unknown", sizeof(src_addr));
   }
 
-  sockaddr_to_human(dst_addr, sizeof(dst_addr),
-                    (struct sockaddr *)&s->origin_addr);
+  sockaddr_to_human(dst_addr, sizeof(dst_addr), (struct sockaddr *)&s->origin_addr);
   log_access(s->credentials.username, src_addr, dst_addr, status);
 }
 
 static unsigned request_connect_success(struct selector_key *key) {
   client_t *s = key->data;
 
-  // 1. Armar respuesta OK (Esto está bien)
+  // 1. Armar respuesta OK
   request_reply reply = {.version = SOCKS5_VERSION,
                          .status = 0x00,
                          .bnd.atyp = ATYP_IPV4,
@@ -401,14 +395,13 @@ static unsigned request_connect_success(struct selector_key *key) {
   if (-1 == request_marshall(&s->write_buffer, &reply))
     return ERROR;
 
-  // Log successful connection
   log_connection(s, "CONNECT");
 
   // 2. Configurar intereses COPY
 
   selector_set_interest(key->s, s->client_fd, OP_WRITE);
 
-  // Escuchamos al origen (Google) por si manda datos
+  // Escuchamos al origen  por si manda datos
   selector_set_interest(key->s, s->origin_fd, OP_READ);
 
   // 3. Setup punteros COPY
@@ -591,7 +584,7 @@ static unsigned on_request_read(struct selector_key *key) {
     }
     return ERROR; // Error de conexión
   } else if (ret == 0) {
-    return DONE; // cerro conexion
+    return DONE; // Cerró conexión
   }
   buffer_write_adv(&s->read_buffer, ret);
 
@@ -616,8 +609,7 @@ static unsigned on_request_read(struct selector_key *key) {
   return REQUEST_READ; // Faltan datos, seguimos esperando
 }
 
-static unsigned init_connection_to_origin(client_t *s,
-                                          struct selector_key *key) {
+static unsigned init_connection_to_origin(client_t *s, struct selector_key *key) {
   int fd = socket(s->origin_domain, SOCK_STREAM, 0);
   if (fd < 0) {
     perror("socket");

@@ -19,8 +19,8 @@ typedef enum{
 }address_type;
 
 typedef struct {
-    uint8_t ver; //version
-    uint8_t cmd; //esto tmb podria sdr un enum
+    uint8_t ver; 
+    uint8_t cmd; 
     address_type atyp; 
     uint8_t addr[256];  //direccion destino
     uint16_t port;
@@ -30,8 +30,8 @@ typedef struct {
 } request_parser;
 
 typedef struct {
-    address_type atyp;       // IPv4 / domain / IPv6
-    uint8_t addr[256];       // dirección 
+    address_type atyp;       
+    uint8_t addr[256];   
     uint8_t addr_len;        // para domain
     uint16_t port;           // puerto origen para la reply
 } reply_addr_t;

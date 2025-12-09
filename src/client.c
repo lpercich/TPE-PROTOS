@@ -123,7 +123,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // 3. Decidir Modo: ¿Hay argumentos extra?
+  // 3. Hay argumentos extra?
   if (argc > 4) {
     // --- MODO ONE-SHOT ---
     char cmd[1024] = {0};

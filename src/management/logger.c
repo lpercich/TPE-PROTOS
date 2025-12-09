@@ -11,8 +11,7 @@ static char access_log[MAX_LOGS][LOG_ENTRY_SIZE];
 static int log_head = 0;
 static int log_count = 0;
 
-void log_access(const char *user, const char *src_addr, const char *dst_addr,
-                const char *status) {
+void log_access(const char *user, const char *src_addr, const char *dst_addr, const char *status) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
   char time_str[64];
