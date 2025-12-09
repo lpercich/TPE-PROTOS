@@ -314,8 +314,65 @@ if command -v ps &> /dev/null && kill -0 $PID_PROXY 2>/dev/null; then
     print_metric "RSS (KB)" "$RSS"
 fi
 
-# 8. Resumen final
-print_header "8. RESUMEN FINAL"
+# 8. TEST DE THROUGHPUT MAXIMO (Loopback)
+print_header "8. TEST DE THROUGHPUT MAXIMO (Loopback)"
+echo "Midiendo velocidad máxima teórica (RAM-to-RAM) vía proxy..."
+echo "Descargando 4.5GB de ceros desde servidor local..."
+
+# Maximizar buffer del proxy para este test
+echo "  -> Ajustando buffer a 64KB..."
+$CLIENT_BIN 127.0.0.1 $MNG_PORT $USER:$PASS "SET_BUFFER 65535" > /dev/null 2>&1
+
+# Puerto para el servidor de ceros
+ZERO_PORT=9999
+ZERO_SIZE_MB=4500
+ZERO_BYTES=$((ZERO_SIZE_MB * 1024 * 1024))
+
+# Iniciar servidor de ceros (responde HTTP 200 y luego streams ceros)
+# Usamos timeout para asegurarnos que se cierre
+(
+  echo -e "HTTP/1.1 200 OK\r\nContent-Length: $ZERO_BYTES\r\n\r\n"
+  dd if=/dev/zero bs=1048576 count=$ZERO_SIZE_MB 2>/dev/null
+) | nc -l -p $ZERO_PORT >/dev/null 2>&1 &
+ZERO_PID=$!
+sleep 1
+
+BYTES_BEFORE=$(get_bytes_transferred)
+START_TIME=$(date +%s%N)
+
+# Descarga via proxy (sin output)
+curl -s -o /dev/null -x socks5://$USER:$PASS@127.0.0.1:$PROXY_PORT http://127.0.0.1:$ZERO_PORT 2>/dev/null || true
+
+END_TIME=$(date +%s%N)
+BYTES_AFTER=$(get_bytes_transferred)
+
+# Asegurar limpieza
+kill $ZERO_PID 2>/dev/null || true
+
+# Cálculos
+DURATION_NS=$((END_TIME - START_TIME))
+DURATION_S=$(dc -e "2k $DURATION_NS 1000000000 / p")
+BYTES_TRANSFERRED=$((BYTES_AFTER - BYTES_BEFORE))
+MB_TRANSFERRED=$(dc -e "2k $BYTES_TRANSFERRED 1048576 / p")
+
+# Evitar división por cero
+if [ "$DURATION_NS" -eq 0 ]; then DURATION_NS=1; fi
+
+# Calcular throughput en MB/s
+THROUGHPUT_MBPS=$(dc -e "2k $MB_TRANSFERRED $DURATION_S / p")
+
+echo ""
+echo "Resultados Throughput Máximo:"
+print_metric "Datos transferidos" "${MB_TRANSFERRED} MB"
+print_metric "Tiempo total" "${DURATION_S} s"
+print_metric "Velocidad Promedio" "${THROUGHPUT_MBPS} MB/s"
+
+echo ""
+echo -e "${YELLOW}Nota: Esta prueba mide la capacidad de procesamiento de CPU/Memoria del proxy${NC}"
+echo -e "${YELLOW}eliminando la latencia de internet. Debería ser mucho mayor que el test de descarga.${NC}"
+
+# 9. Resumen final
+print_header "9. RESUMEN FINAL"
 
 FINAL_HISTORICAL=$(get_historical_connections)
 FINAL_BYTES=$(get_bytes_transferred)

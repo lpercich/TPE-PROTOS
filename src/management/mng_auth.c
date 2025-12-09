@@ -16,6 +16,7 @@ mng_auth_state mng_auth_consume(buffer *b, mng_auth_parser *p, bool *errored) {
         break;
       }
       st = AUTH_CMD_READING;
+      // fallthrough
 
     case AUTH_CMD_READING:
       if (c == '\r') {
