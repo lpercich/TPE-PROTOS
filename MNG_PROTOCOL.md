@@ -1,151 +1,150 @@
-# Protocolo de Gestión (MNG)
+# Protocolo de Gestión
 
-Este documento define el protocolo de gestión basado en texto para el servidor proxy SOCKSv5. El protocolo corre en un puerto TCP dedicado (por defecto 8080) y permite a los administradores monitorear métricas y gestionar usuarios.
+Este documento especifica el protocolo de gestión basado en texto para el servidor proxy SOCKSv5. El protocolo permite a los administradores autenticarse, gestionar usuarios y monitorear métricas en tiempo real.
 
-## Formato General
+**Conexión por Defecto:** Puerto 8080 (TCP).
 
-- **Transporte**: TCP
-- **Codificación**: ASCII / UTF-8
-- **Terminador de Línea**: `\n` (LF)
-- **Estructura**: Petición-Respuesta. El servidor procesa un comando a la vez por conexión.
+---
 
-## Comandos
+## 1. Autenticación
 
-### 1. METRICS
+En caso de querer conectarse al servicio de management via netcat (`nc localhost 8080`), la autenticación es el primer paso obligatorio.
 
-Obtiene las métricas actuales del servidor.
-
-**Petición:**
-```
-METRICS\n
+**Comando:**
+```text
+AUTH <user>:<pass>
 ```
 
-**Respuesta:**
+**Respuesta Exitosa:**
+```text
++OK authentication successful
 ```
-+OK metricas\r\n
-conexiones_totales: <entero>\r\n
-conexiones_actuales: <entero>\r\n
-bytes_transferidos: <entero>\r\n
+
+**Respuesta de Error:**
+```text
+-ERR invalid credentials
+```
+
+---
+
+## 2. Ejecución de Comandos
+
+Tras una autenticación exitosa, el servidor queda a la espera de instrucciones.
+
+### Alta de Usuarios
+Permite registrar nuevos usuarios para el uso del proxy SOCKS5 en tiempo de ejecución.
+
+**Comando:**
+```text
+ADD_USER <usuario>:<contraseña>
 ```
 
 **Ejemplo:**
+```text
+ADD_USER michael:scott
 ```
+
+**Respuestas:**
+*   Éxito: `+OK user michael added correctly`
+*   Error: `-ERR user <name> already exist`
+
+### Baja de Usuarios
+Permite eliminar usuarios existentes para el uso del proxy SOCKS5 en tiempo de ejecución.
+
+**Comando:**
+```text
+DEL_USER <user>
+```
+
+**Respuestas:**
+*   Éxito: `+OK user <user> deleted`
+*   Error: `-ERR user <name> does not exist`
+
+### Listado de Usuarios
+Devuelve la lista completa de usuarios actualmente activos en el sistema.
+
+**Comando:**
+```text
+LIST_USERS
+```
+
+**Salida:**
+Lista de nombres de usuario separados por espacios o saltos de línea.
+
+### Consulta de Métricas
+Permite visualizar en tiempo real las estadísticas vitales del servidor.
+
+**Comando:**
+```text
 METRICS
-+OK metricas
-conexiones_totales: 5
-conexiones_actuales: 1
-bytes_transferidos: 102400
 ```
 
-### 2. ADD_USER
-
-Agrega un nuevo usuario para la autenticación SOCKSv5.
-
-**Petición:**
+**Formato de Salida:**
+```text
++OK metrics
+total connections: <num>
+current connections: <num>
+total transferred bytes: <num>
 ```
-ADD_USER <usuario>:<contraseña>\n
+
+### Consulta de Logs
+Solicita al servidor el registro de accesos.
+
+**Comando:**
+```text
+SHOW_LOGS
 ```
 
-**Respuesta:**
-- Éxito: `+OK usuario <usuario> agregado exitosamente\r\n`
-- Fallo (Usuario existe): `-ERR usuario <usuario> ya existe\r\n`
-- Fallo (Error de formato): `-ERR formato esperado USUARIO:CLAVE\r\n`
+**Formato de Salida:**
+```text
+[Fecha] user=<u_proxy> src=<ip_origen> dst=<destino>
+```
+
+### Configuración Avanzada (Buffer)
+Permite modificar en tiempo de ejecución el tamaño del buffer de lectura/escritura (rango válido: 1 a 65535 bytes).
+
+**Comando:**
+```text
+SET_BUFFER <bytes>
+```
 
 **Ejemplo:**
-```
-ADD_USER admin:secreto123
-+OK usuario admin agregado exitosamente
-```
-
-### 3. DEL_USER
-
-Elimina un usuario existente.
-
-**Petición:**
-```
-DEL_USER <usuario>\n
+```text
+SET_BUFFER 4096
 ```
 
 **Respuesta:**
-- Éxito: `+OK usuario <usuario> eliminado\r\n`
-- Fallo (Usuario no encontrado): `-ERR usuario <usuario> no existe\r\n`
-- Fallo (Falta argumento): `-ERR falta usuario\r\n`
-
-**Ejemplo:**
-```
-DEL_USER admin
-+OK usuario admin eliminado
+```text
++OK buffer size changed to 4096
 ```
 
-### 4. LIST_USERS
+### Finalización de Sesión
+Cierra ordenadamente la conexión.
 
-Lista todos los usuarios registrados.
-
-**Petición:**
-```
-LIST_USERS\n
-```
-
-**Respuesta:**
-```
-+OK <usuario1> <usuario2> ...\r\n
+**Comando:**
+```text
+QUIT
 ```
 
-### 5. SHOW_LOGS
+---
 
-Devuelve los últimos registros de acceso (conexiones exitosas y fallidas).
+## 3. Manejo de Errores
 
-**Petición:**
-```
-SHOW_LOGS\n
-```
+El protocolo es explícito en sus respuestas de error, facilitando la depuración. Todos los errores comienzan con `-ERR`.
 
-**Respuesta:**
-```
-+OK\r\n
-[TIMESTAMP] user=... src=... dst=... status=...\n
-...
-```
+**Listado de Errores Implementados:**
 
-### 6. SET_BUFFER
+*   `-ERR unexpected read error`: Error en la lectura del socket (`recv`).
+*   `-ERR command too long`: Overflow del buffer de entrada.
+*   `-ERR unknown command`: Instrucción no reconocida.
+*   `-ERR invalid AUTH format`: El formato no es `user:pass`.
+*   `-ERR invalid credentials`: Contraseña incorrecta.
+*   `-ERR user <name> already exist`: Usuario ya registrado.
+*   `-ERR already authenticated`: Intento de login con sesión activa.
+*   `-ERR user missing`: Falta el argumento de usuario en `DEL_USER`.
+*   `-ERR user <name> does not exist`: Usuario a eliminar no existe.
+*   `-ERR could not retrieve user list`: Error interno al listar usuarios.
+*   `-ERR invalid size (accepted sizes: 1-65535)`: Tamaño de buffer fuera de rango.
 
-Cambia el tamaño del buffer de lectura/escritura para las nuevas conexiones SOCKS5.
-
-**Petición:**
-```
-SET_BUFFER <bytes>\n
-```
-
-**Respuesta:**
-- Éxito: `+OK buffer size cambiado a <bytes>\r\n`
-- Fallo: `-ERR tamaño invalido\r\n`
-
-### 7. QUIT
-
-Cierra la conexión de administración.
-
-**Petición:**
-```
-QUIT\n
-```
-
-## Autenticación
-
-Al conectarse, el cliente debe autenticarse.
-
-**Petición:**
-```
-AUTH <usuario>:<contraseña>\n
-```
-
-**Respuesta:**
-- Éxito: `+OK autenticacion exitosa\r\n`
-- Fallo: `-ERR credenciales invalidas\r\n`
-- Fallo (Formato): `-ERR formato AUTH invalido, se espera AUTH usuario:clave\r\n`
-
-## Manejo de Errores
-
-Si se recibe un comando desconocido:
-```
--ERR comando desconocido\r\n
-```
+---
+*Esta interfaz permite realizar tareas de mantenimiento y auditoría de manera eficiente y en tiempo real.*

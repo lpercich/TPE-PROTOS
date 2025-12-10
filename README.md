@@ -62,7 +62,7 @@ El servidor se ejecuta mediante el binario `socks5d`. Por defecto escucha en `::
 *   `-P <mng port>`: Puerto TCP para gestión. Por defecto: `8080`.
 *   `-u <name>:<pass>`: Registra un usuario para SOCKSv5. Se pueden agregar hasta 10.
 *   `-v`: Imprime la versión del programa.
-*   `-N`: Deshabilita los "dissectors" (sniffers de contraseñas POP3/HTTP para logs).
+
 
 ### Ejemplos
 
